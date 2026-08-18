@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pocket-agent"
+version = "0.2.0"
+description = "Your own assistant, small enough to read in one evening: loop, memory, MCP, permissions and evals in ~2.6k lines of Python."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Haobo Zu" }]
+keywords = ["agent", "llm", "mcp", "memory", "evals", "local-first"]
+# The core runs on the standard library alone — that is a design constraint, not
+# an accident: `python -m pocket demo` and the eval suite must work on a fresh
+# clone with no install, no key and no network.
+dependencies = []
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.40"]
+openai = ["openai>=1.40"]
+dev = ["pytest>=8", "ruff>=0.16"]
+
+[project.scripts]
+pocket = "pocket.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Jobfromearth/pocket-agent"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pocket"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = [
+    # Broad `except Exception` is the documented pattern here: tools, observers
+    # and MCP servers surface failures as text instead of crashing the loop.
+    "BLE001",
+    # Naive local datetimes are intentional — trace files are named in the
+    # user's local day, and the assistant reasons in the user's local time.
+    "DTZ001", "DTZ005", "DTZ011",
+]

@@ -1,0 +1,20 @@
+name: gate
+
+# The whole suite is offline and dependency-free, so CI is the same command a
+# contributor runs locally — no secrets, no network, no flakes.
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: deterministic evals + release gate
+        run: python -m pocket eval
+      - name: lint
+        run: pipx run ruff==0.16.0 check pocket

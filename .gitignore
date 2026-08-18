@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.pocket/
+.pocket-*/
+dist/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
