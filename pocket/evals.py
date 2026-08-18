@@ -15,6 +15,8 @@ rather than the intelligence of whichever model you plug in.
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -26,6 +28,7 @@ from pocket.mcp import StdioServer, connect_servers
 from pocket.memory import fts_query
 from pocket.models import ScriptedClient
 from pocket.permissions import Policy
+from pocket.team import RESERVED, run_team, worker_tools
 from pocket.tools import Tool, ToolRegistry
 
 
@@ -204,7 +207,9 @@ def test_parallel_nodes_may_not_write_the_same_key():
 
 def test_topology_is_drawn_from_the_engine():
     """The picture is generated from the graph itself, so it cannot drift."""
-    noop = lambda *a, **k: ""      # noqa: E731
+    def noop(*args, **kwargs):
+        return ""
+
     shape = build_triage_graph(classify_fn=lambda m: ("full", ""), calendar_fn=noop,
                                quick_fn=noop, full_fn=noop).describe()
     assert {n["name"] for n in shape["nodes"]} == {
@@ -387,6 +392,178 @@ def test_a_subagent_only_sees_the_tools_it_was_given():
     assert scoped.names() == ["save_note"]
     assert scoped.execute("create_event", {"title": "x", "start": "2026-01-01T09:00"}) == (
         "Error: unknown tool 'create_event'")
+
+
+# ------------------------------------------------------------------ teams
+# Two independent tasks and one that waits: the smallest plan that can tell a
+# real scheduler from a for-loop.
+TEAM_PLAN = [
+    {"key": "remember", "task": "Remember that the Q4 offsite is on Friday",
+     "tools": "save_note"},
+    {"key": "book", "task": "Schedule a kickoff with Alex tomorrow at 9am",
+     "tools": "create_event"},
+    {"key": "confirm", "task": "What is on my calendar tomorrow?",
+     "tools": "list_events", "needs": "book"},
+]
+
+
+def run_plan(pocket, plan=None, client=None, observer=None):
+    return run_team(client or pocket.client, pocket.settings.model, pocket.tools, pocket.conn,
+                    goal="prepare the kickoff", plan=plan or TEAM_PLAN, observer=observer)
+
+
+def test_a_team_runs_a_dependent_task_after_the_one_it_needs():
+    """The flagship team check: `confirm` must read the calendar AFTER `book`
+    wrote it, and its answer must contain what `book` created."""
+    pocket = build_agent(team=True)
+    order = []
+    board = run_plan(pocket, observer=lambda kind, ev: (
+        order.append(ev["node"]) if kind == "node_end" else None))
+    assert order.index("confirm") > order.index("book"), order
+    rows = {r["key"]: r for r in board.rows()}
+    assert "kickoff" in rows["confirm"]["result"], rows["confirm"]["result"]
+    assert pocket.conn.execute("SELECT COUNT(*) c FROM calendar_events").fetchone()["c"] == 1
+
+
+def test_a_worker_sees_only_the_results_it_depends_on():
+    """The inbox flows one way, down the DAG. `confirm` needs `book`, so it is
+    handed book's result — and never hears that `remember` existed at all."""
+    class Recorder(ScriptedClient):
+        def __init__(self):
+            super().__init__()
+            self.systems = []
+
+        def _create(self, **kwargs):
+            self.systems.append(kwargs.get("system") or "")
+            return super()._create(**kwargs)
+
+    pocket, recorder = build_agent(team=True), Recorder()
+    run_plan(pocket, client=recorder)
+    seen = [s for s in recorder.systems if "Your task: What is on my calendar" in s]
+    assert seen, "the dependent worker never ran"
+    assert any("[book]" in s for s in seen), "the dependency's result never arrived"
+    assert not any("[remember]" in s for s in seen), "a worker saw an unrelated sibling"
+
+
+def test_a_failed_worker_blocks_its_dependents_instead_of_guessing():
+    """A board that says 'this did not happen' beats one that quietly runs the
+    next step on missing input."""
+    class Flaky(ScriptedClient):
+        def _create(self, **kwargs):
+            last = kwargs["messages"][-1]["content"]
+            if isinstance(last, str) and "kickoff" in last:
+                raise RuntimeError("provider is down")
+            return super()._create(**kwargs)
+
+    pocket = build_agent(team=True)
+    board = run_plan(pocket, client=Flaky())
+    statuses = {r["key"]: r["status"] for r in board.rows()}
+    assert statuses == {"remember": "done", "book": "failed", "confirm": "blocked"}, statuses
+    assert pocket.conn.execute("SELECT COUNT(*) c FROM calendar_events").fetchone()["c"] == 0
+
+
+def test_a_worker_can_neither_delegate_nor_start_a_team():
+    """One level of fan-out, by construction — the same rule sub-agents follow."""
+    pocket = build_agent(team=True, confirm=lambda *a: True)
+    assert {"assign_team", "delegate"} <= set(pocket.tools.names())
+    assert not set(worker_tools(pocket.tools, []).names()) & set(RESERVED)
+    assert worker_tools(pocket.tools, ["save_note", "delegate"]).names() == ["save_note"]
+
+
+def test_a_cyclic_plan_is_refused_before_any_worker_runs():
+    pocket = build_agent(team=True, confirm=lambda *a: True)
+    output = pocket.tools.execute("assign_team", {"goal": "g", "plan": json.dumps(
+        [{"key": "a", "task": "x", "needs": "b"}, {"key": "b", "task": "y", "needs": "a"}])})
+    assert output.startswith("Error") and "cycle" in output, output
+    assert pocket.conn.execute("SELECT COUNT(*) c FROM tasks").fetchone()["c"] == 0
+
+
+def test_the_team_tool_asks_a_human_before_it_spends_anything():
+    pocket = build_agent(team=True, confirm=lambda *a: False)
+    assert pocket.tools.get("assign_team").risk == "ask"
+    output = pocket.tools.execute("assign_team", {"goal": "g", "plan": json.dumps(TEAM_PLAN)})
+    assert output.startswith("Blocked by policy"), output
+    assert pocket.conn.execute("SELECT COUNT(*) c FROM tasks").fetchone()["c"] == 0
+
+
+def test_the_board_is_a_table_you_can_query_afterwards():
+    pocket = build_agent(team=True)
+    board = run_plan(pocket)
+    rows = pocket.conn.execute("SELECT key, status, depends_on FROM tasks WHERE team=? ORDER BY id",
+                               (board.team,)).fetchall()
+    assert [r["key"] for r in rows] == ["remember", "book", "confirm"]
+    assert {r["status"] for r in rows} == {"done"}
+    assert rows[2]["depends_on"] == "book"
+    assert "[confirm] done (needs book)" in board.render()
+
+
+def test_one_database_is_safe_for_a_whole_wave_of_workers():
+    """Workers in the same wave write through one connection. Python's implicit
+    transaction is per-connection, not per-thread: with it on, one worker's
+    commit ends the transaction another worker opened, and that worker dies with
+    "no transaction is active" — a lost task on a board that looked fine."""
+    import threading
+
+    pocket = build_agent(team=True)
+    assert pocket.conn.isolation_level is None, "state.db must be in autocommit mode"
+    errors: list[Exception] = []
+
+    def write(subject: str) -> None:
+        try:
+            for i in range(20):
+                pocket.memory.facts.add(subject, f"{subject}-{i}")
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=write, args=(name,)) for name in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors, errors
+    assert pocket.conn.execute("SELECT COUNT(*) c FROM facts").fetchone()["c"] == 40
+
+
+# ------------------------------------------------------- the terminal client
+def test_slash_commands_are_answered_without_a_model_call():
+    """What is in context, what can run, what is remembered: the harness already
+    knows all three, so none of them should cost a model call."""
+    from pocket.__main__ import command
+
+    pocket = build_agent()
+    before = pocket.client.calls
+    assert "budget" in command(pocket, "/context")
+    assert "create_event" in command(pocket, "/tools")
+    assert "facts" in command(pocket, "/memory")
+    assert command(pocket, "/nope").strip().startswith("unknown command")
+    assert command(pocket, "what is 2+2?") is None, "a plain message belongs to the model"
+    assert pocket.client.calls == before, "a local command must not spend anything"
+
+
+def test_new_clears_the_window_but_never_the_record():
+    from pocket.__main__ import command
+
+    pocket = build_agent()
+    pocket.respond("Remember that Alex prefers morning meetings")
+    command(pocket, "/new")
+    assert pocket.session.history == []
+    assert pocket.conn.execute("SELECT COUNT(*) c FROM chat_log").fetchone()["c"] > 0
+
+
+# -------------------------------------------------------------- the README
+def test_the_line_count_in_the_readme_is_still_true():
+    """nanobot ships core_agent_lines.sh so the number in its README cannot rot.
+    Same idea, made a gate: the claim is checked against the files it describes.
+    `scripts/line_budget.sh` prints the number to paste back in."""
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    if not readme.is_file():
+        return                              # installed as a wheel: nothing to check
+    claim = re.search(r"totals \*\*([\d,]+) lines\*\*", readme.read_text(encoding="utf-8"))
+    assert claim, "the README no longer states a line count"
+    claimed = int(claim.group(1).replace(",", ""))
+    actual = sum(len(path.read_text(encoding="utf-8").splitlines())
+                 for path in sorted(Path(__file__).parent.glob("*.py")))
+    assert abs(actual - claimed) <= 50, f"README says {claimed} lines; pocket/*.py is {actual}"
 
 
 CASES = [value for name, value in sorted(globals().items()) if name.startswith("test_")]

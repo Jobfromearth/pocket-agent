@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How it is put together
+    url: https://github.com/Jobfromearth/pocket-agent/blob/main/docs/architecture.md
+    about: One turn traced end to end, the file map, and the invariants.
+  - name: Configuration reference
+    url: https://github.com/Jobfromearth/pocket-agent/blob/main/docs/configuration.md
+    about: Every environment variable, provider and MCP setting.

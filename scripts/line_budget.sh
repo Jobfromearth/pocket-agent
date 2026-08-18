@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# The line budget, per pillar. `pocket` claims to be small enough to read in one
+# evening, and a claim nobody can check is a claim that rots — so the number in
+# the README is printed here and asserted by the eval suite
+# (`test_the_line_count_in_the_readme_is_still_true`).
+#
+#   ./scripts/line_budget.sh          # the table, and the total to paste back
+#
+# Borrowed, gratefully, from nanobot's core_agent_lines.sh.
+set -euo pipefail
+cd "$(dirname "$0")/.." || exit 1
+
+count() { cat "$@" 2>/dev/null | wc -l | tr -d ' '; }
+
+printf "pocket line budget\n==================\n"
+printf "  %-10s %5s  %s\n" harness   "$(count pocket/config.py pocket/session.py pocket/agent.py pocket/__main__.py)" "config session agent __main__"
+printf "  %-10s %5s  %s\n" loop      "$(count pocket/loop.py pocket/models.py pocket/tools.py)"                       "loop models tools"
+printf "  %-10s %5s  %s\n" memory    "$(count pocket/memory.py pocket/db.py)"                                        "memory db"
+printf "  %-10s %5s  %s\n" context   "$(count pocket/context.py)"                                                    "context"
+printf "  %-10s %5s  %s\n" reach     "$(count pocket/mcp.py pocket/subagent.py)"                                     "mcp subagent"
+printf "  %-10s %5s  %s\n" team      "$(count pocket/team.py)"                                                       "team"
+printf "  %-10s %5s  %s\n" safety    "$(count pocket/permissions.py)"                                                "permissions"
+printf "  %-10s %5s  %s\n" graph     "$(count pocket/graph.py)"                                                      "graph"
+printf "  %-10s %5s  %s\n" ops       "$(count pocket/trace.py pocket/evals.py)"                                      "trace evals"
+printf "  %-10s %5s\n" "" ""
+printf "  %-10s %5s  %s\n" TOTAL     "$(count pocket/*.py)"                                                          "pocket/*.py — the number the README states"
+printf "  %-10s %5s  %s\n" evals     "$(grep -c '^def test_' pocket/evals.py)"                                       "deterministic cases in the release gate"

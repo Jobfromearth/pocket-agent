@@ -8,13 +8,30 @@ on:
 
 jobs:
   gate:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: deterministic evals + release gate
+        run: python -m pocket eval
+      - name: the demo runs on a fresh clone, offline
+        run: python -m pocket demo
+      - name: the team board runs offline
+        run: python -m pocket team
+
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: deterministic evals + release gate
-        run: python -m pocket eval
       - name: lint
         run: pipx run ruff==0.16.0 check pocket

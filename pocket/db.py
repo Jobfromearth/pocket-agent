@@ -55,6 +55,22 @@ CREATE TRIGGER IF NOT EXISTS episodes_ai AFTER INSERT ON episodes BEGIN
     INSERT INTO episodes_fts(rowid, summary) VALUES (new.id, new.summary);
 END;
 
+-- the team board: one row per delegated task, so `select * from tasks` IS the
+-- kanban. status: pending -> running -> done, or failed / blocked
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY,
+    team TEXT NOT NULL,
+    key TEXT NOT NULL,
+    instruction TEXT NOT NULL,
+    tools TEXT DEFAULT '',               -- the scoped tool list the worker got
+    depends_on TEXT DEFAULT '',          -- comma separated task keys
+    status TEXT DEFAULT 'pending',
+    result TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS tasks_by_team ON tasks (team, id);
+
 -- raw chat log; consolidation reads the rows it has not distilled yet
 CREATE TABLE IF NOT EXISTS chat_log (
     id INTEGER PRIMARY KEY,
@@ -68,7 +84,19 @@ CREATE TABLE IF NOT EXISTS chat_log (
 
 
 def connect(home: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(home / "state.db")
+    # A team runs its workers in parallel threads (team.py) and they all write
+    # through this one connection, so two settings are load-bearing:
+    #   check_same_thread=False  the workers are allowed to use it at all
+    #   isolation_level=None     autocommit. Python's implicit transaction is
+    #                            per-connection, not per-thread: with it on, one
+    #                            worker's commit() ends the transaction another
+    #                            worker opened, and that worker's own commit()
+    #                            dies with "no transaction is active". Every write
+    #                            here is one short statement, so each committing
+    #                            itself costs nothing and removes the whole race.
+    # The `conn.commit()` calls elsewhere stay: they are no-ops in this mode, and
+    # they keep every write path readable on its own.
+    conn = sqlite3.connect(home / "state.db", check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(SCHEMA)

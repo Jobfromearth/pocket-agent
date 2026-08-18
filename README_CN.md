@@ -1,0 +1,162 @@
+# pocket-agent
+
+**属于你自己的助理。跑在你自己的电脑上。小到一个晚上就能读完。**&nbsp;&nbsp;[**English**](README.md)
+
+我想要一个记得住我的生活、又跑在我自己机器上的助理——不是租来的产品，也不是把最有意思的部分藏在
+三层抽象后面的框架。所以我写了「还能称之为严肃 Agent」的最小版本，并且让每一部分都可读：
+**一个机制，一个文件。**
+
+它**不需要 API key、不需要任何第三方依赖**，克隆完十秒就能看到它跑起来：
+
+```bash
+python -m pocket demo     # 一趟脚本化的巡演：记忆、门控、分诊、一次真实的工具调用
+python -m pocket eval     # 46 条确定性评测 + 发布门禁，一秒内跑完
+python -m pocket mcp      # 启一个 MCP server 并真的调一次工具，全程不涉及模型
+python -m pocket team     # 三个 worker 共用一块看板：两个并行，一个等依赖
+python -m pocket tools    # 模型能调什么，以及哪些可以不问人就跑
+python -m pocket          # 真正对话（在 .env 里放一个 key）
+```
+
+对话中输入 `/help` `/tools` `/context` `/memory` `/board` `/new`，由 harness 直接回答，
+永远不会送到模型那里。
+
+核心**只依赖标准库**，`pocket/*.py` 合计 **3,133 行**；`anthropic` / `openai` 只有在你指定
+对应 provider 时才会惰性导入。那个行数不是装饰——[评测里有一条断言它仍然属实](pocket/evals.py)，
+`./scripts/line_budget.sh` 会按支柱把它打印出来。
+
+## 里面有什么
+
+| 支柱 | 文件 | 放的是什么 |
+|---|---|---|
+| **Harness** | `config.py` `session.py` `agent.py` `__main__.py` | 工作记忆的组装、接线、终端网关 |
+| **Loop** | `loop.py` `models.py` `tools.py` | reason→act→observe 加两条护栏；一个循环，两种线格式 |
+| **Memory** | `memory.py` `db.py` | 语义（FTS5）/ 情景 / 程序性记忆，检索门控，固化 |
+| **Context** | `context.py` | 大结果外置到磁盘；超预算时历史被折叠 |
+| **Reach** | `mcp.py` `subagent.py` | 别人 server 上的 MCP 工具；受限子 Agent |
+| **Team** | `team.py` | 多个 worker 共用一块看板，按依赖关系调度 |
+| **Safety** | `permissions.py` | 拒绝清单、询问人类、按会话授权——拒绝以文本回给模型 |
+| **Graph** | `graph.py` | 循环**之外**的结构：并行节点、代码路由、fail-open |
+| **Ops** | `trace.py` `evals.py` | JSONL 轨迹、花费账本、确定性评测、发布门禁 |
+
+状态都在 `.pocket/`：`state.db`（SQLite + FTS5——记忆、日历、聊天记录和团队看板）、
+`calendar.ics`、`MEMORY.md`、`artifacts/`、`traces/<日期>.jsonl`、`usage.jsonl`。
+全部是你能直接打开的文件。
+
+## 九个值得辩护的决定
+
+1. **检索门控。** 多数 Agent 每轮都查记忆。那不仅慢，而且更糟：不相关的记忆会带偏答案。这里先让
+   便宜模型回答一个很窄的问题——*这条消息需要记忆吗？*——决定和理由都会写进轨迹，于是它是可审计
+   的，而不是玄学。`memory.py`
+
+2. **所有「裁判形状」的东西都 fail-open。** 门控坏了就照常检索；分诊坏了就走完整循环；图里的节点
+   坏了就退回普通循环；摘要失败就保留原本压不掉的上下文。降级只应该付出延迟——绝不付出能力，更不
+   丢数据。`agent.py`、`context.py`
+
+3. **循环只有两个出口。** 模型不再要求工具，或者达到 `max_iterations` 并如实说出来。没有第三种
+   结束方式。`loop.py`
+
+4. **MCP 按 2026-07-28 修订实现。** 该修订让 MCP 变成**无状态**：没有 `initialize` 握手、没有
+   session id，协议版本与客户端能力都随 `_meta` 走。stdio 上没有 HTTP 状态码可退，所以规范自己
+   的建议是用 `server/discover` 探测、失败即视为「这台是旧版」。两条路径都实现了，也都由评测对着
+   一个能说两种方言的内置 server 覆盖。`mcp.py`、`examples/demo_server.py`
+
+5. **第三方能力默认受门控。** 每个 MCP 工具和子 Agent 都是 `risk="ask"`：每个会话由人先看一眼。
+   一条很短的拒绝清单胜过任何确认。拒绝会像工具错误一样以文本回给模型，于是这一轮换条路继续，而
+   不是让进程死掉。`permissions.py`
+
+6. **上下文窗口是预算，要刻意地花。** 40KB 的工具结果会写进 `artifacts/`，只留预览加指针，并给出
+   `read_artifact` 让模型取它真正需要的那段；对话超预算时，最旧的几轮折成一条摘要，最近几轮保持
+   逐字。什么都没被删——`state.db` 里每条消息都还在。`context.py`
+
+7. **委派但不交出控制权。** 子 Agent 就是又一次 `run_loop`，只是任务更窄、工具表更小。它跑在一次
+   工具调用里，只有*结果*会回到父级，并且不能再委派。爆炸半径正好是你传进去的那张工具表。
+   `subagent.py`
+
+8. **团队是一块看板，不是一群蜂。** 当多个子任务彼此独立时，真正的问题不再是「子 Agent 是什么」，
+   而是协作。所以计划是**数据**——key、工具白名单、`needs`——而不是 Agent 之间的对话。DAG 交给本来
+   就有的图引擎执行，独立任务在同一波里并行；每个 worker 只收到它声明依赖的那些结果；某个 worker
+   失败时，下游被标成 `blocked`，而不是拿着缺失的输入继续跑。看板是 `state.db` 里的一张表，事后
+   可读。`team.py`
+
+9. **确定性评测和判分评测永远不共处一个文件。** 「`create_event` 是不是带着正确参数触发了、那一行
+   是不是落库了？」是单元测试。「回答好不好？」是打分判断。把两者混在一起是最常见的评测错误；这里
+   由确定性套件把住发布门禁。`evals.py`
+
+## 图，简述
+
+循环*发现*下一步做什么；图*预先决定*下一步是什么。两者都在。引擎按波次执行节点——同一波的并行节点
+必须写不相交的 key，否则直接抛错——路由器是普通 Python 函数，所以模型永远不直接决定控制流。内置的
+工作流是分诊：用小模型给消息分类，**同时**并行加载日历，然后路由。`thanks!` 不会吵醒大模型；真正
+的任务走的仍是 flag 关掉时那条 `_full_turn`，所以「循环作为节点」不可能和「循环作为默认路径」漂移。
+
+```bash
+POCKET_GRAPH_WORKFLOWS=1 python -m pocket
+```
+
+## 团队看板，简述
+
+`delegate` 把一个子任务交给一个子 Agent。`assign_team` 接收一份计划——带 `key`、`tools`、`needs`
+的 JSON 列表——把每个任务写成 `state.db` 里的一行，然后交给波次调度器：独立任务一起跑，依赖完成
+本身*就是*解锁，每个 worker 的系统提示里只带着它点名依赖的那些结果。除此之外 worker 之间什么都不
+传：没有点对点闲聊，也没有共享草稿纸。
+
+```bash
+python -m pocket team                      # 固定计划，离线，全程没有模型做决定
+POCKET_TEAM=1 python -m pocket             # 让模型可以调用 assign_team（会先问你）
+sqlite3 .pocket/state.db "select key, status from tasks"    # 事后的看板
+```
+
+不合法的计划（成环、依赖不存在、超过 8 个任务）在任何 worker 花掉一个 token 之前就被拒绝，并把
+原因以文本回给模型让它改。完整细节，包括它**刻意不做**的事：[docs/teams.md](docs/teams.md)。
+
+## 接一个 MCP server
+
+`.pocket/mcp.json` —— 和所有 MCP 客户端一样的结构：
+
+```json
+{"servers": {"demo": {"command": ["python3", "-m", "pocket.examples.demo_server"]}}}
+```
+
+它的工具会以 `mcp__demo__<tool>` 出现，并标记为「先问人」。`python -m pocket mcp` 会写好这份起步
+配置、连上去、并真的调用一次，让你亲眼看到协议在跑。
+
+## 接着读哪里
+
+| | |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | 一轮对话的完整链路、文件地图、七条不变量 |
+| [docs/configuration.md](docs/configuration.md) | 每一个环境变量、provider 与 MCP 设置 |
+| [docs/teams.md](docs/teams.md) | 看板：计划结构、调度、失败处理，以及它的边界 |
+| [AGENTS.md](AGENTS.md) | 在这个仓库里干活的 Agent（和赶时间的人）该守的规矩 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [CHANGELOG.md](CHANGELOG.md) | PR 的门槛、信任边界、改了什么 |
+
+## 诚实的边界
+
+- `POCKET_PROVIDER=mock` 是**基于规则的桩，不是模型**。它的存在只是为了让 demo 和评测能离线跑；
+  它证明的是 harness 能跑，而不是模型聪明。要真答案，请指向 `anthropic`、`openai`、
+  `deepseek` 或 `kimi`。
+- 三个核心工具，一个旗舰任务（日程）。每个注册过的工具都会进入**每一次**提示，所以核心刻意保持很
+  窄——能力通过 MCP 进来，`assign_team` 也默认关闭（`POCKET_TEAM=1` 才注册）。
+- 团队的 worker 是本进程里的线程，共用同一个 home 和同一个数据库。没有 git worktree、没有每个
+  worker 的沙箱、没有点对点收件箱、也不能中途重新规划：你得到的隔离就是那张工具表。更重的版本请看
+  ClawTeam。
+- 只有循环里的模型调用被计价写进 `usage.jsonl`；门控、分诊和摘要调用有轨迹但不计价。美元是小价格表
+  估出来的，token 才是真的。
+- 关键词检索（FTS5），不是向量。对一个人的事实来说，排序过的关键词检索又快、又本地、还能用
+  `sqlite3` 直接看。
+- MCP 客户端覆盖 stdio、`server/discover`、`tools/list` 和 `tools/call`。Streamable HTTP、
+  resources、prompts 和多轮 input request 没有实现——遇到 `input_required` 会如实报告，而不是
+  含糊地答一半。
+
+## 出处
+
+四支柱结构，以及少数核心例程（循环的两条护栏、FTS5 查询清洗、图引擎的波次调度），是从
+[waku-agent](https://github.com/ShenSeanChen/waku-agent)（MIT）重新实现并裁剪而来——那是功能完整
+的版本：仪表盘、语音与聊天网关、可插拔记忆后端、LLM-as-judge 套件。`mcp.py`、`permissions.py`、
+`context.py`、`subagent.py`、`team.py` 全部是本仓库自己的。MIT 协议。
+
+另有两个项目是被读过、被致谢、被借鉴的，而不是被依赖的：
+[nanobot](https://github.com/HKUDS/nanobot)——终端客户端的 `/` 命令，以及「用脚本让 README 里的
+行数不会腐烂」这个习惯（`core_agent_lines.sh`）；
+[ClawTeam](https://github.com/HKUDS/ClawTeam)——看板：计划即数据、kanban 状态、会自动解锁的依赖，
+以及「宁可说这件事没发生，也不要拿缺失的输入往下跑」这份克制。两者都不是依赖，但都值得完整读一遍。

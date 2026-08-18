@@ -1,0 +1,47 @@
+name: Bug report
+description: Something behaves differently than the README or the docs say
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what came back. Paste the output.
+      placeholder: |
+        $ python -m pocket demo
+        ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model
+      description: "POCKET_PROVIDER / POCKET_MODEL, or `mock` if offline"
+      placeholder: mock
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python and OS
+      placeholder: "3.11.9, macOS 15"
+    validations:
+      required: true
+  - type: textarea
+    id: gate
+    attributes:
+      label: Does the release gate still pass?
+      description: "Output of `python -m pocket eval` (its last two lines are enough)"
+  - type: textarea
+    id: trace
+    attributes:
+      label: Trace
+      description: >
+        Relevant lines from `.pocket/traces/<date>.jsonl`, or `python -m pocket trace`.
+        Please remove anything private first — traces contain your messages.
