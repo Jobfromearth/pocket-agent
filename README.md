@@ -22,7 +22,7 @@ python -m pocket          # chat for real (put a key in .env)
 Inside a chat, `/help` `/tools` `/context` `/memory` `/board` `/new` are answered by the
 harness itself and never reach a model.
 
-The core imports **stdlib only** and `pocket/*.py` totals **3,133 lines**; `anthropic` /
+The core imports **stdlib only** and `pocket/*.py` totals **3,195 lines**; `anthropic` /
 `openai` load lazily, and only if you point it at that provider. That line count is not
 decoration — [an eval asserts it is still true](pocket/evals.py), and
 `./scripts/line_budget.sh` prints it per pillar.

@@ -9,6 +9,7 @@ server, no embedding model, and no extra dependency.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from pathlib import Path
 
 SCHEMA = """
@@ -83,9 +84,62 @@ CREATE TABLE IF NOT EXISTS chat_log (
 """
 
 
+class _SerializedCursor:
+    """A Cursor returned by _SerializedConnection. Fetches are serialized with
+    the same lock the connection uses, so a fetch on one thread's cursor can
+    never interleave with another thread's execute() on the shared connection."""
+
+    def __init__(self, cursor: sqlite3.Cursor, lock: threading.RLock):
+        self._cursor = cursor
+        self._lock = lock
+
+    def fetchone(self):
+        with self._lock:
+            return self._cursor.fetchone()
+
+    def fetchall(self):
+        with self._lock:
+            return self._cursor.fetchall()
+
+    def fetchmany(self, size: int = -1):
+        with self._lock:
+            return self._cursor.fetchmany(size) if size != -1 else self._cursor.fetchmany()
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _SerializedConnection:
+    """Wraps the raw sqlite3.Connection so every call into it is serialized —
+    see the load-bearing note in connect() below for why this exists."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def execute(self, *args, **kwargs) -> _SerializedCursor:
+        with self._lock:
+            return _SerializedCursor(self._conn.execute(*args, **kwargs), self._lock)
+
+    def executemany(self, *args, **kwargs) -> _SerializedCursor:
+        with self._lock:
+            return _SerializedCursor(self._conn.executemany(*args, **kwargs), self._lock)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.executescript(*args, **kwargs)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def connect(home: Path) -> sqlite3.Connection:
     # A team runs its workers in parallel threads (team.py) and they all write
-    # through this one connection, so two settings are load-bearing:
+    # through this one connection, so three things are load-bearing:
     #   check_same_thread=False  the workers are allowed to use it at all
     #   isolation_level=None     autocommit. Python's implicit transaction is
     #                            per-connection, not per-thread: with it on, one
@@ -94,10 +148,18 @@ def connect(home: Path) -> sqlite3.Connection:
     #                            dies with "no transaction is active". Every write
     #                            here is one short statement, so each committing
     #                            itself costs nothing and removes the whole race.
+    #   _SerializedConnection    check_same_thread=False only lifts Python's own
+    #                            guard; the sqlite3 module still isn't safe for
+    #                            concurrent calls on one shared Connection — two
+    #                            threads calling execute() at the same moment can
+    #                            corrupt its internal cursor bookkeeping and raise
+    #                            InterfaceError('bad parameter or other API
+    #                            misuse'). One lock around every call turns that
+    #                            race into a queue.
     # The `conn.commit()` calls elsewhere stay: they are no-ops in this mode, and
     # they keep every write path readable on its own.
     conn = sqlite3.connect(home / "state.db", check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(SCHEMA)
-    return conn
+    return _SerializedConnection(conn)
