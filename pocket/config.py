@@ -76,6 +76,11 @@ class Settings:
     # register the `delegate` tool (a sub-agent with a scoped tool set)
     subagents: bool = field(
         default_factory=lambda: os.getenv("POCKET_SUBAGENTS", "1") in ("1", "true", "yes"))
+    # register the `assign_team` tool (several workers over one shared board).
+    # Off by default: every registered tool ships in every prompt, and a team is
+    # the heaviest thing this assistant can start.
+    team: bool = field(
+        default_factory=lambda: os.getenv("POCKET_TEAM", "") in ("1", "true", "yes"))
 
     # --- graph front door (off = plain loop; on = triage graph, fails open)
     graph_workflows: bool = field(

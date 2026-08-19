@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pocket-agent"
-version = "0.2.0"
-description = "Your own assistant, small enough to read in one evening: loop, memory, MCP, permissions and evals in ~2.6k lines of Python."
+version = "0.3.0"
+description = "Your own assistant, small enough to read in one evening: loop, memory, MCP, permissions, teams and evals in ~3.1k lines of Python."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Haobo Zu" }]
-keywords = ["agent", "llm", "mcp", "memory", "evals", "local-first"]
+keywords = ["agent", "llm", "mcp", "memory", "evals", "multi-agent", "local-first"]
 # The core runs on the standard library alone — that is a design constraint, not
 # an accident: `python -m pocket demo` and the eval suite must work on a fresh
 # clone with no install, no key and no network.
@@ -26,6 +26,8 @@ pocket = "pocket.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/Jobfromearth/pocket-agent"
+Documentation = "https://github.com/Jobfromearth/pocket-agent/blob/main/docs/README.md"
+Changelog = "https://github.com/Jobfromearth/pocket-agent/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["pocket"]
@@ -41,4 +43,8 @@ ignore = [
     # Naive local datetimes are intentional — trace files are named in the
     # user's local day, and the assistant reasons in the user's local time.
     "DTZ001", "DTZ005", "DTZ011",
+    # A rejected team plan is always a ValueError, including "this entry is not
+    # an object": one exception type for the whole family is what lets the tool
+    # turn any bad plan into text the model can read (team.py).
+    "TRY004",
 ]

@@ -22,6 +22,7 @@ from pocket.models import get_client, resolve
 from pocket.permissions import Policy
 from pocket.session import Session
 from pocket.subagent import make_delegate_tool
+from pocket.team import make_team_tool
 from pocket.tools import build_registry
 from pocket.trace import Tracer
 
@@ -62,6 +63,13 @@ class Pocket:
                 max_tokens=self.settings.max_tokens))
         self.session = Session(self.settings, memory=self.memory)
         self.tracer = Tracer(self.settings)
+        if self.settings.team:
+            # the team's own events (waves, workers, routes) land in the same
+            # trace as the turn that started it — one tape, not two
+            self.tools.register(make_team_tool(
+                self.client, self.settings.model, self.tools, self.conn,
+                max_iterations=max(2, self.settings.max_iterations // 2),
+                max_tokens=self.settings.max_tokens, observer=self.tracer.event))
         # MCP servers are opt-in by the presence of .pocket/mcp.json, and a broken
         # one is reported and skipped — never fatal.
         self.mcp_servers = connect_servers(
