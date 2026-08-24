@@ -219,6 +219,31 @@ that starter config, connects, and makes one real call so you can see the protoc
 | [AGENTS.md](AGENTS.md) | the rules a coding agent (or a hurried human) should follow here |
 | [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [CHANGELOG.md](CHANGELOG.md) | the bar for a PR, the trust boundaries, what changed |
 
+## What it actually costs
+
+Numbers a reader can reproduce, not adjectives. The offline ones come from
+`scripts/measure.py`; the two A/B runs used `kimi-k2.5` through the ordinary
+provider path, and both sides of each comparison ran the same turns against the
+same model with one variable changed.
+
+| Mechanism | Measured |
+|---|---|
+| Skill catalog vs inlining every body (10 skills) | resident system prompt **3,022 → 1,010 tokens, −66.6%** |
+| — per skill | catalog 44 tokens vs body 195 tokens (**4.4×**) |
+| A 40KB tool result, offloaded | **40,000 → 763 chars, −98.1%** |
+| A 20-turn session over budget, compacted | **14,472 → 3,135 chars, −78.3%**, 13 messages folded |
+| Context governance on vs off, same task | input tokens **13,370 → 2,118, −84.2%** (total −82.6%) |
+| Triage routing a turn away from the loop | **5/8 turns**; ~2 model calls instead of ~4.3, **−53%**, and no tool schemas in the prompt |
+| Retrieval gate, 12 labelled cases | **recall 100% (zero misses)**, cost-weighted accuracy **0.90** |
+| — irrelevant memory injected | **100% → 50%** of the cases that should not retrieve |
+
+Two of these are honest about what they are not. The triage row counts model
+calls rather than latency, because the free tier this was measured on is rate
+limited and latency there measures the rate limiter. And the retrieval gate's
+plain accuracy is 75% — the cost-weighted number is higher because every one of
+its three mistakes was a needless retrieval rather than a missed one, which is
+the trade the metric exists to price.
+
 ## Honest limits
 
 - `POCKET_PROVIDER=mock` is a **rule-based stub, not a model**. It exists so the demo and the
