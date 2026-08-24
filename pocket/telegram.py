@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -51,13 +52,20 @@ def run(bus, token: str = "", notify=print) -> int:
                "Message the bot and add the chat id it prints here.")
     notify(f"telegram · polling · {len(allow)} chat(s) allowed · ctrl-c to quit")
 
-    offset = 0
+    offset, backoff = 0, 0.0
     while True:
         try:
             updates = _call(token, "getUpdates", offset=offset, timeout=POLL_SECONDS)
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-            notify(f"telegram · poll failed, retrying: {type(exc).__name__}: {exc}")
+            # only the SUCCESSFUL path is paced by the long poll. A failure that
+            # returns immediately — no network, a bad token, a refused proxy —
+            # would otherwise spin this loop as fast as the syscall returns.
+            backoff = min(max(backoff * 2, 1.0), 60.0)
+            notify(f"telegram · poll failed, retrying in {backoff:.0f}s: "
+                   f"{type(exc).__name__}: {exc}")
+            time.sleep(backoff)
             continue
+        backoff = 0.0
         for update in updates.get("result", []):
             offset = update["update_id"] + 1
             message = update.get("message") or update.get("edited_message") or {}

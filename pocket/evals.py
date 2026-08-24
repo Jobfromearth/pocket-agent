@@ -22,6 +22,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,8 +37,14 @@ from pocket.bus import Bus
 from pocket.coder import argv as coder_argv
 from pocket.coder import make_coder_tool, run_command
 from pocket.config import Settings
-from pocket.context import KEEP_WHOLE_RESULTS, compact_history, fit_for_model
-from pocket.dashboard import Panels
+from pocket.context import (
+    KEEP_WHOLE_RESULTS,
+    artifacts_dir,
+    compact_history,
+    fit_for_model,
+    offload_if_large,
+)
+from pocket.dashboard import Panels, serve
 from pocket.graph import build_triage_graph, run_graph
 from pocket.judge import build_judge, cost_weighted_accuracy, run_judged, score_reply
 from pocket.loop import run_loop
@@ -54,7 +62,14 @@ from pocket.subagent import FanOut
 from pocket.team import RESERVED, run_team, worker_tools
 from pocket.tools import Tool, ToolRegistry
 from pocket.trace import estimate_cost, spans_or_none
-from pocket.web import OPENER, Blocked, GuardedRedirects, check_url, make_web_tools
+from pocket.web import (
+    OPENER,
+    Blocked,
+    GuardedRedirects,
+    check_url,
+    make_web_tools,
+    search,
+)
 
 
 def build_agent(confirm=None, **overrides) -> Pocket:
@@ -1584,6 +1599,133 @@ def test_a_timeout_comes_back_to_the_model_as_a_sentence():
 
     out = make_coder_tool(home, runner=hangs, timeout=5).fn(task="x")
     assert "did not finish within 5s" in out, out
+
+
+# ------------------------------------------- regressions a code review found
+def test_a_progress_payload_cannot_rename_the_event_it_arrives_as():
+    """Both the bus and the tracer build their record as {"event": kind,
+    **payload}, so a payload key called "event" renames the event. Every coder
+    line was arriving in the trace as `tool_use`."""
+    from pocket.coder import progress
+
+    step = progress(json.dumps({"type": "tool_use", "tool": "edit"}))
+    assert "event" not in step, step
+    assert step["step"] == "tool_use" and step["detail"] == "edit"
+
+    pocket = build_agent()
+    bus = Bus(pocket)
+    seen = []
+    bus.subscribe(lambda kind, record: seen.append(record))
+    bus.publish("coder_progress", {"coder": "pi", "line": 1, **step})
+    assert seen[0]["event"] == "coder_progress", seen[0]
+
+
+def test_a_chatty_stderr_does_not_deadlock_a_delegated_run():
+    """Draining stdout to EOF and reading stderr afterwards stalls the moment the
+    child writes more than a pipe buffer of warnings: it blocks on stderr, stops
+    producing stdout, and we block on stdout."""
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    noisy = [sys.executable, "-c",
+             "import sys; sys.stderr.write('w' * 300000); print('done')"]
+    started = time.monotonic()
+    code, stdout, stderr = run_command(noisy, home, timeout=60)
+    assert time.monotonic() - started < 30, "it deadlocked until the watchdog"
+    assert code == 0 and "done" in stdout
+    assert len(stderr) == 300_000, len(stderr)
+
+
+def test_an_injection_past_the_offload_cutoff_is_still_caught():
+    """Offloading ran first, so the screen only ever saw a 600-char preview —
+    and a page big enough to be offloaded is exactly one worth screening."""
+    pocket = build_agent(tool_result_limit=800, confirm=lambda *a: True)
+    buried = "<p>" + ("harmless filler. " * 200) + POISON + "</p>"
+    for tool in make_web_tools(opener=lambda url, data=None: buried):
+        pocket.tools.register(tool)
+    shown = pocket.tools.execute("fetch_url", {"url": "https://example.com/"})
+    assert "Injection risk: high" in shown, shown[:300]
+    assert "read_artifact" in shown, "it should still be offloaded"
+    name = shown.split('name="')[1].split('"')[0]
+    replayed = pocket.tools.execute("read_artifact", {"name": name, "start": 0, "length": 200})
+    assert "untrusted content" in replayed, "the fence has to be inside the artifact too"
+
+
+def test_an_escalation_asks_again_even_for_a_tool_already_granted():
+    """A session grant means an `ask` tool stopped asking after the first yes.
+    The case this exists for is "the user approved fetch_url once, and the page
+    it fetched wants a second fetch somewhere else"."""
+    asked = []
+    pocket = build_agent(confirm=lambda name, args, risk: asked.append((name, risk)) or True)
+    for tool in make_web_tools(opener=lambda url, data=None: f"<p>{POISON}</p>"):
+        pocket.tools.register(tool)
+    pocket.tools.execute("fetch_url", {"url": "https://example.com/"})
+    assert asked == [("fetch_url", "ask")], asked
+    pocket.tools.execute("fetch_url", {"url": "https://evil.example/x"})
+    assert [risk for _, risk in asked] == ["ask", "escalated"], asked
+
+
+def test_a_sub_agent_is_never_handed_a_way_to_fan_out_again():
+    """`tools` is optional, so a bare delegate(task=...) used to pass on the
+    parent's whole registry — the coder subprocess and a team included."""
+    pocket = build_agent(team=True, confirm=lambda *a: True)
+    scoped = pocket.tools.subset(
+        [n for n in pocket.tools.names() if n not in ("delegate", "delegate_task", "assign_team")])
+    assert not {"delegate", "delegate_task", "assign_team"} & set(scoped.names())
+    from pocket.subagent import FANOUT_TOOLS
+
+    assert set(FANOUT_TOOLS) == {"delegate", "delegate_task", "assign_team"}
+
+
+def test_two_artifacts_never_land_on_the_same_name():
+    """The name used to be a count of what was in the folder, so deleting one
+    artifact made the next write overwrite a live one."""
+    home = Path(tempfile.mkdtemp(prefix="pocket-art-"))
+    first = offload_if_large("fetch_url", "a" * 5000, home, 100)
+    second = offload_if_large("fetch_url", "b" * 5000, home, 100)
+    names = {out.split('name="')[1].split('"')[0] for out in (first, second)}
+    assert len(names) == 2, names
+    (artifacts_dir(home) / min(names)).unlink()
+    third = offload_if_large("fetch_url", "c" * 5000, home, 100)
+    assert third.split('name="')[1].split('"')[0] not in names, "it reused a deleted name"
+
+
+def test_a_result_without_a_snippet_does_not_shift_the_others():
+    """Two flat findalls zipped by position: one sponsored row with no snippet
+    put every later snippet on the wrong URL."""
+    page = """<a class="result__a" href="https://a.example/">A</a>
+<a class="result__a" href="https://b.example/">B</a>
+<a class="result__snippet" href="x">belongs to B</a>"""
+    rows = search("q", 5, opener=lambda url, data=None: page)
+    by_url = {r["url"]: r["snippet"] for r in rows}
+    assert by_url["https://a.example/"] == "", by_url
+    assert by_url["https://b.example/"] == "belongs to B", by_url
+
+
+def test_the_dashboard_chat_endpoint_refuses_a_cross_site_post():
+    """A page the user already has open can POST here without a preflight, and
+    `bus.submit` runs a real turn with real tools behind it."""
+    pocket = build_agent()
+    bus = Bus(pocket).start()
+    server = serve(pocket, bus, port=0)
+    port = server.server_address[1]
+    body = json.dumps({"text": "hi"}).encode()
+
+    def post(headers):
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/api/chat",
+                                         data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return response.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    try:
+        assert post({"Content-Type": "text/plain"}) == 403, "a simple POST needs no preflight"
+        assert post({"Content-Type": "application/json",
+                     "Origin": "https://evil.example"}) == 403
+        assert post({"Content-Type": "application/json"}) == 200
+    finally:
+        server.shutdown()
+        bus.stop()
 
 
 # -------------------------------------------------------------- the README

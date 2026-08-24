@@ -78,8 +78,25 @@ def run_command(args: list[str], cwd: Path, timeout: float,
     process = subprocess.Popen(
         args, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         stdin=subprocess.DEVNULL, text=True, bufsize=1)
+    # stderr gets its own reader. Draining stdout to EOF first and reading stderr
+    # after deadlocks the moment the child writes more than a pipe buffer of
+    # warnings: it blocks on stderr, stops producing stdout, and we block on
+    # stdout. A coder printing a traceback is the ordinary case, not an edge one.
+    errors: list[str] = []
+    drain = threading.Thread(target=lambda: errors.append(process.stderr.read() or ""),
+                             daemon=True)
+    drain.start()
     expired: list[bool] = []
-    watchdog = threading.Timer(timeout, lambda: (expired.append(True), process.kill()))
+
+    def give_up() -> None:
+        # only an expiry if it is still running: firing between wait() and
+        # cancel() would report a finished run, with its files on disk, as a
+        # timeout
+        if process.poll() is None:
+            expired.append(True)
+            process.kill()
+
+    watchdog = threading.Timer(timeout, give_up)
     watchdog.start()
     lines: list[str] = []
     try:
@@ -88,14 +105,14 @@ def run_command(args: list[str], cwd: Path, timeout: float,
             if on_line:
                 on_line(line.rstrip())
         code = process.wait()
-        stderr = process.stderr.read() or ""
     finally:
         watchdog.cancel()
+        drain.join(timeout=5)
         process.stdout.close()
         process.stderr.close()
     if expired:
         raise subprocess.TimeoutExpired(args, timeout)
-    return code, "".join(lines), stderr
+    return code, "".join(lines), "".join(errors)
 
 
 def progress(line: str) -> dict | None:
@@ -112,7 +129,9 @@ def progress(line: str) -> dict | None:
     if not isinstance(event, dict):
         return None
     detail = event.get("tool") or event.get("name") or event.get("status") or ""
-    return {"event": str(event.get("type") or "event"), "detail": str(detail)[:120]}
+    # NOT "event": both the bus and the tracer build their record as
+    # {"event": kind, **payload}, so a payload key by that name renames the event
+    return {"step": str(event.get("type") or "event"), "detail": str(detail)[:120]}
 
 
 def read_events(stdout: str) -> tuple[str, list[dict]]:
@@ -163,6 +182,11 @@ def make_coder_tool(home: Path, runner: Callable[..., tuple[int, str, str]] = ru
         args = argv(task)
         if not args:
             return "Error: POCKET_CODER is empty, so there is no coding agent to call."
+        if task not in args:
+            # `POCKET_CODER="claude -p"` is an easy mistake, and without this the
+            # coder launches with no instruction and reports exit 0 as if it worked
+            return ("Error: POCKET_CODER has no {task} placeholder, so the instruction has "
+                    f"nowhere to go. Current value splits to: {command_template()}")
         workspace = Path(cwd).expanduser() if cwd else new_workspace(home, task)
         if not workspace.is_dir():
             return f"Error: '{workspace}' is not a directory."

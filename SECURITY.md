@@ -45,6 +45,15 @@ best-effort project — expect a reply in days, not hours.
   skips confirmation for the names you list — including the one-shot escalation
   `injection.py` arms after a high-risk result, which works by asking. A trusted
   tool cannot be escalated. List only tools you have read.
+- **The address guard is a check, not a pin.** `web.py` resolves a host, and
+  urllib resolves it again when it connects; a DNS record with a zero TTL can
+  answer public for the first and private for the second. Closing that means
+  connecting to the validated address with the hostname in the `Host` header,
+  which this client does not do.
+- **The dashboard's chat endpoint is same-origin only.** It requires a JSON
+  content type (so a cross-origin POST needs a preflight the browser refuses), a
+  loopback `Host`, and a loopback `Origin` when one is sent. Loopback by itself
+  was never a control against a page the user already has open.
 - **`.pocket/` is not encrypted.** It is a directory of your data — facts,
   calendar, traces, artifacts. Back it up or delete it like any other.
 - **Keys live in `.env` and in your environment.** `.gitignore` covers `.env` and

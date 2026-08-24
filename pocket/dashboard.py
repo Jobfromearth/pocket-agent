@@ -15,7 +15,9 @@ Three decisions worth knowing before reading on:
                      which is why closing it loses nothing
   loopback only      it exposes memory, a SQL browser and a chat box with your
                      tools behind it. It binds 127.0.0.1 and there is no flag to
-                     change that; put a real proxy in front if you need one
+                     change that; put a real proxy in front if you need one.
+                     Loopback is not a control against the browser you already
+                     have open, though — see `_same_origin` below
 
 The page itself is one static file with no build step: open `dashboard.html` and
 what you read is what runs.
@@ -38,6 +40,7 @@ PAGE = Path(__file__).parent / "dashboard.html"
 # parser: "which tables may a browser tab see" is a question with a short answer.
 BROWSABLE = ("facts", "episodes", "chat_log", "calendar_events", "tasks")
 ROW_LIMIT = 200
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
 
 
 def _rows(conn: sqlite3.Connection, sql: str, args: tuple = ()) -> list[dict]:
@@ -158,9 +161,29 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
         return self._json({"error": "no such route"}, 404)
 
+    def _same_origin(self) -> bool:
+        """A page the user is already visiting can POST here without asking the
+        browser first — a form-style request with a text/plain body skips the
+        preflight entirely — and `bus.submit` runs a real turn with real tools
+        behind it. The reply is opaque to whoever sent it; the side effects are
+        not. So: the body must be JSON (which forces a preflight the browser
+        will refuse cross-origin), the Host must be loopback (which is what
+        stops DNS rebinding pointing a name at us), and an Origin, if the
+        browser sent one, must be ours.
+        """
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            return False
+        host = self.headers.get("Host", "").rsplit(":", 1)[0]
+        if host not in LOCAL_HOSTS:
+            return False
+        origin = self.headers.get("Origin")
+        return origin is None or urlparse(origin).hostname in ("127.0.0.1", "localhost", "::1")
+
     def do_POST(self) -> None:
         if urlparse(self.path).path != "/api/chat":
             return self._json({"error": "no such route"}, 404)
+        if not self._same_origin():
+            return self._json({"error": "this endpoint only takes same-origin JSON"}, 403)
         length = int(self.headers.get("Content-Length", "0"))
         try:
             text = json.loads(self.rfile.read(length) or b"{}").get("text", "").strip()

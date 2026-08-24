@@ -19,6 +19,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import ClassVar
@@ -39,6 +42,38 @@ class Provider:
 # three requests a minute, and an eval run makes fifty. Both SDKs honour a
 # `retry-after` header, so the only thing missing was the patience to use it.
 MAX_RETRIES = 10
+
+
+@contextmanager
+def _paced():
+    """Serialise requests, and space them out, when a provider limits by rate.
+
+    Retrying a 429 does not help against a per-minute window: the backoff ends,
+    the window has not, and the next attempt is refused too. The only thing that
+    works is not making the request yet.
+
+    The lock is held across the CALL, not just across the timing — a team runs
+    its workers in threads, and an account with a concurrency limit of one
+    refuses the second request whatever the spacing was. Off by default (0),
+    because a paid tier needs neither; `POCKET_MIN_REQUEST_INTERVAL=21` turns a
+    three-a-minute free tier into a run that finishes.
+    """
+    gap = float(os.getenv("POCKET_MIN_REQUEST_INTERVAL", "0"))
+    if gap <= 0:
+        yield
+        return
+    with _pace_lock:
+        wait = gap - (time.monotonic() - _last_call[0])
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            yield
+        finally:
+            _last_call[0] = time.monotonic()
+
+
+_pace_lock = threading.Lock()
+_last_call = [0.0]
 
 PROVIDERS: dict[str, Provider] = {
     "anthropic": Provider("anthropic", "ANTHROPIC_API_KEY", None,
@@ -115,7 +150,8 @@ class AnthropicClient:
             kwargs["system"] = system_blocks(system)
         if tools:
             kwargs["tools"] = tools
-        return self._client.messages.create(**kwargs)
+        with _paced():
+            return self._client.messages.create(**kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -171,14 +207,16 @@ class OpenAICompatClient:
         kwargs = self._to_openai(model=model, messages=messages, max_tokens=max_tokens,
                                  system=system, tools=tools)
         try:
-            response = self._client.chat.completions.create(**kwargs)
+            with _paced():
+                response = self._client.chat.completions.create(**kwargs)
         except Exception as exc:
             # older OpenAI-compatible endpoints only know `max_tokens`. Retry ONLY
             # when the error is about that parameter, so real failures stay visible.
             if "max_completion_tokens" not in str(exc).lower():
                 raise
             kwargs["max_tokens"] = kwargs.pop("max_completion_tokens")
-            response = self._client.chat.completions.create(**kwargs)
+            with _paced():
+                response = self._client.chat.completions.create(**kwargs)
         choice = response.choices[0].message
         blocks = []
         if choice.content:

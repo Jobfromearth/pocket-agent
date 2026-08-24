@@ -11,8 +11,8 @@ the number shown is honest about being an estimate.
 
 Both files are always written and are the source of truth. When
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, the same events are ALSO mirrored as
-OpenTelemetry spans over OTLP/HTTP, with `OTEL_EXPORTER_OTLP_HEADERS` carrying
-whatever auth the receiver wants. That is deliberately the whole integration:
+OpenTelemetry spans over OTLP/HTTP (port 4318, not gRPC's 4317), with
+`OTEL_EXPORTER_OTLP_HEADERS` carrying whatever auth the receiver wants. That is deliberately the whole integration:
 Langfuse, Phoenix and every other backend speak this protocol, so a per-vendor
 adapter here would be code that exists only to be maintained. A broken exporter
 never costs a turn.

@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+**A code review, and the fourteen things it found.** Four of them mattered:
+
+`coder_progress` payloads carried a key called `event`, and both the bus and the
+tracer build their record as `{"event": kind, **payload}` — so every delegated
+coder line arrived in the trace and the dashboard renamed as `tool_use`.
+
+`run_command` drained stdout to EOF and read stderr afterwards. A coder writing
+more than a pipe buffer of warnings blocks on stderr, stops producing stdout,
+and the parent blocks on stdout — a stall that only ended when the 900-second
+watchdog killed a run that was working fine. stderr gets its own reader now.
+
+Offloading ran before injection screening, so `Screen` only ever classified the
+600-character preview of a page — and a page big enough to be offloaded is
+exactly one worth screening. Screening now happens first, which also puts the
+fence banner inside the artifact, so `read_artifact` replays it.
+
+The dashboard's `/api/chat` took any cross-site POST. A form-style request with
+a `text/plain` body needs no preflight, so any page the user had open could run
+a real turn with real tools behind it; the reply was opaque to the sender but
+the side effects were not. It now requires JSON, a loopback `Host` and a
+loopback `Origin`.
+
+Plus: an escalation was silently spent on any `ask` tool a session had already
+granted (`Policy.check_now` asks anyway); a failing Telegram poll retried with
+no backoff; artifact names came from a directory count, so deleting one made the
+next write overwrite a live one; a sub-agent could still be handed
+`delegate_task` and `assign_team`; search snippets were matched to links by
+index; a `POCKET_CODER` with no `{task}` launched a coder with no task; the
+watchdog could fire between `wait()` and `cancel()`; the sample OTLP port was
+gRPC's; and `pocket-agent[tracing]` was documented in four places and never
+existed. Every one has a case now.
+
+**Rate limits.** `POCKET_MIN_REQUEST_INTERVAL` spaces requests out and holds its
+lock across the call, not just the timing — retrying a 429 does nothing against
+a per-minute window, and an account with a concurrency limit of one refuses the
+second request whatever the spacing was.
+
 **Ten skills, and a matcher that stopped matching on function words.** The
 catalog shipped one skill, which made the two-level disclosure a mechanism with
 nothing to disclose. There is no library to download for this: Anthropic's
@@ -206,7 +243,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 117 deterministic cases.
+**Evals:** 46 → 125 deterministic cases.
 
 ## 0.3.0
 

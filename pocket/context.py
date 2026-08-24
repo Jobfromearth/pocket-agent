@@ -38,7 +38,9 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from pocket.tools import Tool
 
@@ -63,7 +65,9 @@ def offload_if_large(name: str, output: str, home: Path, limit: int = 2000) -> s
         return output
     directory = artifacts_dir(home)
     safe = re.sub(r"[^a-z0-9_]+", "-", name.lower())
-    path = directory / f"{safe}-{len(list(directory.glob('*.txt'))) + 1}.txt"
+    # a monotonic name, never a count of what is in the folder: deleting one
+    # artifact would drop the count and the next write would land on a live file
+    path = directory / f"{safe}-{datetime.now():%H%M%S}-{uuid4().hex[:6]}.txt"
     path.write_text(output, encoding="utf-8")
     return (f"{output[:PREVIEW_CHARS]}\n\n[... {len(output) - PREVIEW_CHARS} more characters. "
             f"Full output saved to {path.name} ({len(output)} chars). "

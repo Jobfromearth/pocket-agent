@@ -124,14 +124,22 @@ class Screen:
         return fence(name, output, finding)
 
     def before_tool(self, name: str, args: dict) -> str | None:
-        """Not a refusal — a promotion to `risk="ask"` for exactly one call."""
+        """Not a refusal — a promotion to ask-a-human for exactly one call.
+
+        It has to ask even for a tool that is already `risk="ask"`, because a
+        session grant means that tool stopped asking after the first yes. The
+        case this exists for is "the user approved fetch_url once, and now the
+        page it fetched wants a second fetch somewhere else" — and answering
+        that with a tool whose prompt was already spent is answering it with
+        nothing.
+        """
         if self.armed is None or name == "read_artifact":
             return None
         finding, self.armed = self.armed, None
         tool = self.registry.get(name)
-        if tool is None or tool.risk == "ask":
-            return None          # it was already going to ask; nothing to add
-        decision = self.registry.policy.check(name, args, risk="ask")
+        if tool is None:
+            return None
+        decision = self.registry.policy.check_now(name, args)
         self._say("escalation", {"tool": name, "because": finding.reasons[:2],
                                  "verdict": decision.verdict})
         if decision.allowed:

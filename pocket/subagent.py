@@ -66,8 +66,10 @@ def make_delegate_tool(client, model: str, registry: ToolRegistry, *,
                        max_iterations: int = 4, max_tokens: int = 2048, observer=None) -> Tool:
     def delegate(task: str, tools: str = "", context: str = "") -> str:
         wanted = [name.strip() for name in tools.split(",") if name.strip()]
-        # never the delegate tool itself: one level of delegation, by construction
-        allowed = [n for n in (wanted or registry.names()) if n != "delegate"]
+        # never anything that fans out again: `tools` is optional, so without this
+        # a bare delegate(task=...) handed the sub-agent the parent's whole
+        # registry — the coder subprocess and an eight-worker team included
+        allowed = [n for n in (wanted or registry.names()) if n not in FANOUT_TOOLS]
         scoped = registry.subset(allowed)
         result = run_loop(client=client, model=model,
                           system=SUBAGENT_SYSTEM.format(context=context or "(none)"),

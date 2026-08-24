@@ -69,6 +69,29 @@ class Policy:
             return Decision("asked", "human approved")
         return Decision("deny", "human declined")
 
+    def check_now(self, name: str, args: dict) -> Decision:
+        """Ask, even if this tool was already granted for the session.
+
+        `check` remembers a yes so one confirmation covers a turn's retries.
+        That is right for ordinary calls and wrong for an escalation: the whole
+        point of `injection.py` arming one is that something changed since the
+        human said yes. A grant that survives that is a grant that answers a
+        question nobody asked. Deny patterns still win, and `POCKET_TRUST` still
+        wins — it means "never ask me about this", and honouring it here is what
+        SECURITY.md calls a loaded gun.
+        """
+        blob = f"{name} {args}"
+        for pattern, why in DENY_PATTERNS:
+            if re.search(pattern, blob, re.IGNORECASE):
+                return Decision("deny", why)
+        if name in self.trusted:
+            return Decision("allow")
+        if self.confirm is None:
+            return Decision("deny", "needs confirmation but nothing can ask the human")
+        if self.confirm(name, args, "escalated"):
+            return Decision("asked", "human approved after an escalation")
+        return Decision("deny", "human declined")
+
 
 def cli_confirm(name: str, args: dict, risk: str) -> bool:
     """The terminal's answer to `Policy.confirm`. Anything but 'y' is a no."""

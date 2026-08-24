@@ -105,9 +105,10 @@ tables, and a chat box with your tools behind it.
 
 The JSONL trace and the spend ledger are always written and need nothing
 installed. Setting the endpoint above additionally exports one `agent_run` span
-per turn with a child span per event, which needs
-`pip install 'pocket-agent[tracing]'`. There is no per-vendor adapter and there
-should not be: every receiver speaks the same protocol. A missing dependency or
+per turn with a child span per event. The OpenTelemetry SDK and the OTLP/HTTP
+exporter are hard dependencies, so nothing extra to install — point it at port
+4318, which is OTLP/HTTP; 4317 is gRPC and this exporter does not speak it.
+There is no per-vendor adapter and there should not be: every receiver speaks the same protocol. A missing dependency or
 an unreachable collector is recorded and skipped — it never costs a turn.
 
 Evals come in two suites that never share a runner:

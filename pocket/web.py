@@ -7,8 +7,13 @@ the same guarded opener, and that opener is where every rule lives:
   scheme      http and https only — never file://, data:, or gopher://
   address     the resolved host must be a public one. A model that has just
               read a web page can be told by that page to fetch
-              http://169.254.169.254/ next, and the only reliable place to stop
-              that is before the socket opens
+              http://169.254.169.254/ next, so the check happens before the
+              request goes out. It is a check and not a guarantee: urllib
+              resolves the name again when it connects, so a record with a zero
+              TTL can answer public here and private there. Closing that means
+              connecting to the address we validated and carrying the hostname
+              in the Host header, which this client does not do — SECURITY.md
+              says so rather than this docstring claiming otherwise
   redirects   re-checked at every hop, because a public host is perfectly
               allowed to redirect to 127.0.0.1
   type        a response that is not text is refused, not pasted in as bytes
@@ -110,7 +115,12 @@ def to_text(page: str) -> str:
     return _BLANK_RUN.sub("\n\n", text).strip()
 
 
-_LINK = re.compile(r'(?is)<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>')
+# One pattern over one result block, not two flat lists zipped by position: a
+# result with no snippet (a sponsored row, a video card) shifted every snippet
+# after it onto the wrong URL, and the model would cite it that way.
+_RESULT = re.compile(
+    r'(?is)<a[^>]*class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>'
+    r'(?P<rest>.*?)(?=<a[^>]*class="result__a"|\Z)')
 _SNIPPET = re.compile(r'(?is)class="result__snippet"[^>]*>(.*?)</a>')
 
 
@@ -124,11 +134,14 @@ def _unwrap(href: str) -> str:
 def search(query: str, max_results: int = 5,
            opener: Callable[..., str] = open_url) -> list[dict[str, str]]:
     page = opener(SEARCH_URL, urllib.parse.urlencode({"q": query}).encode())
-    links, snippets = _LINK.findall(page), _SNIPPET.findall(page)
     results = []
-    for index, (href, title) in enumerate(links[:max(1, min(max_results, 10))]):
-        results.append({"url": _unwrap(href), "title": to_text(title),
-                        "snippet": to_text(snippets[index] if index < len(snippets) else "")})
+    for block in _RESULT.finditer(page):
+        snippet = _SNIPPET.search(block.group("rest"))
+        results.append({"url": _unwrap(block.group("href")),
+                        "title": to_text(block.group("title")),
+                        "snippet": to_text(snippet.group(1) if snippet else "")})
+        if len(results) >= max(1, min(max_results, 10)):
+            break
     return results
 
 

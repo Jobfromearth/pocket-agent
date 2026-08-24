@@ -89,10 +89,16 @@ class ToolRegistry:
         if vetoed is not None:
             return vetoed
         try:
-            output = self.on_result(name, tool.fn(**args))
+            raw = tool.fn(**args)
         except Exception as exc:            # surface, never crash the loop
             return f"Error running {name}: {exc}"
-        return self.hooks.run("after_tool", name, args, output) or output
+        # Screen BEFORE offloading. The other order let a 40KB page be replaced
+        # by a 600-char preview first, so injection.py classified the preview and
+        # anything past it scored zero — and the pages big enough to be offloaded
+        # are exactly the ones worth screening. Fencing first also means the
+        # banner is inside the artifact, so `read_artifact` replays it too.
+        screened = self.hooks.run("after_tool", name, args, raw)
+        return self.on_result(name, screened if screened is not None else raw)
 
 
 def missing_arguments(tool: Tool, args: dict[str, Any]) -> list[str]:
