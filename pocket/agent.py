@@ -73,7 +73,9 @@ class Pocket:
             for tool in make_web_tools():
                 self.tools.register(tool)
         if self.settings.coder:
-            self.tools.register(make_coder_tool(self.settings.home))
+            # notify is late-bound: the tracer and the gateway's observer are
+            # composed per turn, and this tool is built before either exists
+            self.tools.register(make_coder_tool(self.settings.home, notify=self._say))
         if self.settings.subagents:
             self.tools.register(make_delegate_tool(
                 self.client, self.settings.model, self.tools,
@@ -109,6 +111,11 @@ class Pocket:
         # one is reported and skipped — never fatal.
         self.mcp_servers = connect_servers(
             self.tools, load_config(self.settings.home), notify=self.tracer.event)
+
+    def _say(self, kind: str, event: dict) -> None:
+        """Whatever is listening to this turn, if anything is."""
+        if self.hooks.notify:
+            self.hooks.notify(kind, event)
 
     def close(self) -> None:
         for server in self.mcp_servers:

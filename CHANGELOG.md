@@ -9,6 +9,15 @@ here, and then owing a sandbox: the moment a tool executes an arbitrary string,
 a deny list stops being enough. A coding agent is serious software and it is not
 this repo's argument.
 
+Its output is read as it arrives, not at the end: every line becomes a
+`coder_progress` event on the same bus everything else uses, so the terminal and
+the dashboard show it moving. That is deliberately not asynchrony — the turn
+still waits and the loop still has exactly two exits — but it is the difference
+between "this is taking a while" and "this has died", which is most of what
+asynchrony was going to buy. The timeout is a watchdog thread rather than a
+check between lines, because a process that has hung prints nothing and would
+never reach such a check.
+
 Which binary runs is a config line — `POCKET_CODER` is the whole command with
 `{task}` where the instruction goes — because the part worth owning is the
 workspace, the manifest and the gate. Each run gets a dated folder (not a temp
@@ -177,7 +186,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 113 deterministic cases.
+**Evals:** 46 → 116 deterministic cases.
 
 ## 0.3.0
 

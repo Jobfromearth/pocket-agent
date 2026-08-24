@@ -43,6 +43,14 @@ def show(kind: str, event: dict) -> None:
     elif kind == "tool":
         print(f"  tool · {event['tool']}({event['args']})")
         print(f"       -> {event['output']}")
+    elif kind == "coder_start":
+        print(f"  coder · {event['coder']} started in {event['cwd']}")
+    elif kind == "coder_progress":
+        detail = f" {event['detail']}" if event.get("detail") else ""
+        print(f"  coder · [{event['line']}] {event.get('event') or event.get('note', '')}{detail}")
+    elif kind == "coder_end":
+        files = ", ".join(event["created"]) or "no new files"
+        print(f"  coder · exit {event['exit_code']} — {files}")
     elif kind == "consolidation":
         print(f"  memory · consolidated {event['new_facts']} new fact(s)")
     elif kind == "compaction":

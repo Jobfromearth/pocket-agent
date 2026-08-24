@@ -19,6 +19,18 @@ badly would cost the thing this repo is actually for.
               own script — the workspace, the manifest and the gate are ours
               either way, and which binary runs is a config line
 
+A delegated run is the slowest thing this assistant can start, so its output is
+read as it arrives rather than at the end: every line becomes a `coder_progress`
+event on the same bus everything else uses, and the terminal and the dashboard
+show it moving. That is deliberately NOT asynchrony — the turn still waits, and
+the loop still has exactly two exits. It is the difference between "this is
+taking a while" and "this has died", which is most of what asynchrony was going
+to buy.
+
+A run that goes silent is a different problem, and the timeout is a watchdog
+thread rather than a check between lines: a process that prints nothing would
+never reach a check between lines.
+
 What is NOT claimed: this is not a sandbox. The delegate runs as you, with your
 files, in the directory it was given. The gate is `risk="ask"` and a human
 reading the task before it starts. That is the same bargain waku makes with the
@@ -32,6 +44,7 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -54,12 +67,52 @@ def argv(task: str) -> list[str]:
             for part in command_template()]
 
 
-def run_command(args: list[str], cwd: Path, timeout: float) -> tuple[int, str, str]:
-    """The seam the eval suite replaces, so the suite never needs pi installed."""
-    finished = subprocess.run(
-        args, cwd=str(cwd), capture_output=True, text=True, timeout=timeout,
-        stdin=subprocess.DEVNULL, check=False)
-    return finished.returncode, finished.stdout or "", finished.stderr or ""
+def run_command(args: list[str], cwd: Path, timeout: float,
+                on_line: Callable[[str], None] | None = None) -> tuple[int, str, str]:
+    """The seam the eval suite replaces, so the suite never needs pi installed.
+
+    stdout is read line by line so a long run can report progress while it runs.
+    The timeout is a watchdog thread and not a check between lines, because a
+    process that has hung prints nothing and would never reach such a check —
+    which is exactly the case the timeout exists for."""
+    process = subprocess.Popen(
+        args, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, text=True, bufsize=1)
+    expired: list[bool] = []
+    watchdog = threading.Timer(timeout, lambda: (expired.append(True), process.kill()))
+    watchdog.start()
+    lines: list[str] = []
+    try:
+        for line in process.stdout:
+            lines.append(line)
+            if on_line:
+                on_line(line.rstrip())
+        code = process.wait()
+        stderr = process.stderr.read() or ""
+    finally:
+        watchdog.cancel()
+        process.stdout.close()
+        process.stderr.close()
+    if expired:
+        raise subprocess.TimeoutExpired(args, timeout)
+    return code, "".join(lines), stderr
+
+
+def progress(line: str) -> dict | None:
+    """One line of a coder's stream, reduced to something worth putting on the
+    bus. A raw event stream is for `events.jsonl`; a human wants to know it is
+    alive and roughly what it is doing."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return {"note": line[:160]}
+    if not isinstance(event, dict):
+        return None
+    detail = event.get("tool") or event.get("name") or event.get("status") or ""
+    return {"event": str(event.get("type") or "event"), "detail": str(detail)[:120]}
 
 
 def read_events(stdout: str) -> tuple[str, list[dict]]:
@@ -103,7 +156,9 @@ def write_manifest(folder: Path, **fields) -> Path:
 
 
 def make_coder_tool(home: Path, runner: Callable[..., tuple[int, str, str]] = run_command,
-                    timeout: float = TIMEOUT) -> Tool:
+                    timeout: float = TIMEOUT, notify=None) -> Tool:
+    say = notify or (lambda kind, event: None)
+
     def delegate_task(task: str, cwd: str = "") -> str:
         args = argv(task)
         if not args:
@@ -113,8 +168,17 @@ def make_coder_tool(home: Path, runner: Callable[..., tuple[int, str, str]] = ru
             return f"Error: '{workspace}' is not a directory."
         before = {p for p in workspace.rglob("*") if p.is_file()}
         started = datetime.now()
+        seen = [0]
+
+        def on_line(line: str) -> None:
+            step = progress(line)
+            if step:
+                seen[0] += 1
+                say("coder_progress", {"coder": args[0], "line": seen[0], **step})
+
+        say("coder_start", {"coder": args[0], "cwd": str(workspace), "task": task[:160]})
         try:
-            code, stdout, stderr = runner(args, workspace, timeout)
+            code, stdout, stderr = runner(args, workspace, timeout, on_line)
         except FileNotFoundError:
             return (f"Error: '{args[0]}' is not on PATH. Install pi "
                     f"(github.com/earendil-works/pi), or point POCKET_CODER at a coding "
@@ -137,6 +201,8 @@ def make_coder_tool(home: Path, runner: Callable[..., tuple[int, str, str]] = ru
             finished=datetime.now().isoformat(timespec="seconds"),
             exit_code=code, created=created, reply=reply, stderr=stderr[-2000:])
 
+        say("coder_end", {"coder": args[0], "exit_code": code, "created": created,
+                          "cwd": str(workspace)})
         head = (f"{args[0]} finished with exit code {code} in {workspace}.\n"
                 f"Files it created: {', '.join(created) or 'none'}\n"
                 f"Manifest: {manifest}")

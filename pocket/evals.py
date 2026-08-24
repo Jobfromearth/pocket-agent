@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,7 +33,7 @@ from pocket import dream
 from pocket.agent import Pocket
 from pocket.bus import Bus
 from pocket.coder import argv as coder_argv
-from pocket.coder import make_coder_tool
+from pocket.coder import make_coder_tool, run_command
 from pocket.config import Settings
 from pocket.context import KEEP_WHOLE_RESULTS, compact_history, fit_for_model
 from pocket.dashboard import Panels
@@ -1417,9 +1419,12 @@ def test_an_unreachable_http_server_is_reported_and_skipped():
 def _coder(reply_lines, home, code=0, stderr="", files=()):
     """The shipped tool with the subprocess swapped for a function — the same
     seam web.py uses, so the suite never needs pi installed."""
-    def runner(args, cwd, timeout):
+    def runner(args, cwd, timeout, on_line=None):
         for name, text in files:
             (Path(cwd) / name).write_text(text, encoding="utf-8")
+        for line in reply_lines:
+            if on_line:
+                on_line(line)
         return code, "\n".join(reply_lines), stderr
 
     return make_coder_tool(home, runner=runner)
@@ -1460,7 +1465,7 @@ def test_a_failing_run_reports_stderr_instead_of_pretending():
 def test_a_missing_coder_says_how_to_get_one():
     home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
 
-    def missing(args, cwd, timeout):
+    def missing(args, cwd, timeout, on_line=None):
         raise FileNotFoundError(args[0])
 
     out = make_coder_tool(home, runner=missing).fn(task="x")
@@ -1511,6 +1516,55 @@ def test_the_budget_is_wired_into_a_real_assistant():
     assert pocket.tools.execute(
         "delegate", {"task": "say hi", "tools": "save_note"}).count("sub-agent") == 1
     assert pocket.tools.execute("delegate", {"task": "again"}).startswith("Refused:")
+
+
+def test_a_long_run_reports_that_it_is_alive_while_it_runs():
+    """Not asynchrony: the turn still waits and the loop still has two exits.
+    This is the difference between "taking a while" and "died"."""
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    seen = []
+    stream = [json.dumps({"type": "tool_use", "tool": "edit"}),
+              "plain progress line",
+              json.dumps({"type": "message_end", "text": "done"})]
+
+    def runner(args, cwd, timeout, on_line=None):
+        for line in stream:
+            on_line(line)
+        return 0, "\n".join(stream), ""
+
+    tool = make_coder_tool(home, runner=runner,
+                           notify=lambda kind, event: seen.append((kind, event)))
+    tool.fn(task="edit three files")
+    kinds = [kind for kind, _ in seen]
+    assert kinds[0] == "coder_start" and kinds[-1] == "coder_end", kinds
+    steps = [event for kind, event in seen if kind == "coder_progress"]
+    assert [s["line"] for s in steps] == [1, 2, 3], steps
+    assert steps[0]["detail"] == "edit", steps[0]
+    assert steps[1]["note"] == "plain progress line", steps[1]
+
+
+def test_a_coder_that_goes_silent_is_killed_at_the_deadline():
+    """A hung process prints nothing, so a check between lines would never run.
+    The watchdog is a thread for exactly that case."""
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    quiet = [sys.executable, "-c", "import time; time.sleep(30)"]
+    started = time.monotonic()
+    try:
+        run_command(quiet, home, timeout=1.0)
+    except subprocess.TimeoutExpired:
+        assert time.monotonic() - started < 10, "the watchdog did not fire promptly"
+        return
+    raise AssertionError("a silent process should have been killed")
+
+
+def test_a_timeout_comes_back_to_the_model_as_a_sentence():
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+
+    def hangs(args, cwd, timeout, on_line=None):
+        raise subprocess.TimeoutExpired(args, timeout)
+
+    out = make_coder_tool(home, runner=hangs, timeout=5).fn(task="x")
+    assert "did not finish within 5s" in out, out
 
 
 # -------------------------------------------------------------- the README
