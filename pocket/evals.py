@@ -11,6 +11,15 @@ rather than the intelligence of whichever model you plug in.
 
     python -m pocket eval        # this suite, plus a summary line
     pytest pocket/evals.py       # same cases, if you prefer pytest
+
+A case has three answers here, not two. PASS and FAIL are obvious; SKIP is for a
+case that cannot run where it is — the DeepEval contract needs DeepEval, and
+`python -m pocket eval` is supposed to work on a fresh clone with nothing
+installed. Without SKIP that case had to either fail on a bare checkout (which
+is what CI kept reporting) or be deleted (which is worse). A skip never blocks
+the gate and is always counted out loud, for the same reason the judged suite
+reports `skipped` rather than `pass`: a check that did not run must not look
+like one that did.
 """
 
 from __future__ import annotations
@@ -70,6 +79,18 @@ from pocket.web import (
     make_web_tools,
     search,
 )
+
+
+class Skipped(Exception):
+    """This case cannot run here. Not a pass, not a failure — say which."""
+
+
+def needs(module: str) -> None:
+    """Skip unless an optional dependency is importable."""
+    import importlib.util
+
+    if importlib.util.find_spec(module) is None:
+        raise Skipped(f"{module} is not installed")
 
 
 def build_agent(confirm=None, **overrides) -> Pocket:
@@ -788,6 +809,7 @@ def test_the_deepeval_grader_speaks_this_repos_provider_shape():
     """DeepEval drives the grader through `DeepEvalBaseLLM.generate(prompt, schema)`
     and expects a validated pydantic object back. Pin that contract here, with a
     scripted client, so a DeepEval upgrade cannot break the gate silently."""
+    needs("deepeval")
     from pydantic import BaseModel
 
     class Score(BaseModel):
@@ -1744,7 +1766,26 @@ def test_the_line_count_in_the_readme_is_still_true():
     assert abs(actual - claimed) <= 50, f"README says {claimed} lines; pocket/*.py is {actual}"
 
 
+def pytest_skip_hook(func):
+    """pytest has its own skip exception; translate ours on the way out so both
+    runners agree about which cases did not run."""
+    def wrapped():
+        try:
+            return func()
+        except Skipped as why:
+            import pytest
+
+            pytest.skip(str(why))
+
+    wrapped.__name__ = func.__name__
+    wrapped.__doc__ = func.__doc__
+    return wrapped
+
+
 CASES = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
+for _name, _case in list(globals().items()):
+    if _name.startswith("test_"):
+        globals()[_name] = pytest_skip_hook(_case)
 
 REPORT = "eval_report.json"
 HISTORY = "eval_runs.jsonl"
@@ -1773,19 +1814,23 @@ def write_report(home: Path, deterministic: dict, judged: dict) -> dict:
 
 def run_deterministic() -> dict:
     """A tiny runner, so the suite needs no test framework to prove itself."""
-    passed, failed = 0, []
+    passed, failed, skipped = 0, [], []
     for case in CASES:
         try:
             case()
             passed += 1
             print(f"  PASS  {case.__name__}")
+        except Skipped as why:
+            skipped.append(f"{case.__name__} ({why})")
+            print(f"  SKIP  {case.__name__} — {why}")
         except Exception as exc:
             failed.append(case.__name__)
             print(f"  FAIL  {case.__name__}: {exc}")
-    total = passed + len(failed)
-    print(f"\ndeterministic: {passed}/{total} passed")
+    total = passed + len(failed) + len(skipped)
+    tail = f", {len(skipped)} skipped" if skipped else ""
+    print(f"\ndeterministic: {passed}/{total - len(skipped)} passed{tail}")
     return {"status": "pass" if not failed else "fail", "cases": total,
-            "passed": passed, "failed": failed}
+            "passed": passed, "failed": failed, "skipped": skipped}
 
 
 def main(argv: list[str] | None = None) -> int:

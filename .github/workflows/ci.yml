@@ -1,7 +1,10 @@
 name: gate
 
-# The whole suite is offline and dependency-free, so CI is the same command a
-# contributor runs locally — no secrets, no network, no flakes.
+# Two jobs on purpose. `gate` runs on a bare checkout with nothing installed,
+# because "clone it and run the demo" is a claim this repo makes and CI is the
+# only thing that can keep it true. `installed` then runs the same suite with the
+# dependencies present, so a case that skips on the bare clone is not a case that
+# never runs anywhere. No secrets, no network, no flakes in either.
 on:
   push:
   pull_request:
@@ -27,6 +30,29 @@ jobs:
         run: python -m pocket demo
       - name: the team board runs offline
         run: python -m pocket team
+
+  installed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        run: pip install -e .
+      - name: the same suite, with every dependency present
+        run: python -m pocket eval
+      - name: nothing may stay skipped here
+        run: |
+          python -m pocket gate
+          python - <<'PY'
+          import json, pathlib, sys
+          report = json.loads(pathlib.Path(".pocket/eval_report.json").read_text())
+          skipped = report["deterministic"].get("skipped", [])
+          if skipped:
+              sys.exit("cases skipped where nothing is missing: " + "; ".join(skipped))
+          print("no deterministic case was skipped")
+          PY
 
   lint:
     runs-on: ubuntu-latest

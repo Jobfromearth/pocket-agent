@@ -185,8 +185,13 @@ class StdioServer(Server):
 
     def exchange(self, payload: dict, expect_reply: bool = True) -> dict | None:
         assert self._process and self._process.stdin
-        self._process.stdin.write(json.dumps(payload) + "\n")
-        self._process.stdin.flush()
+        try:
+            self._process.stdin.write(json.dumps(payload) + "\n")
+            self._process.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            # the server died. Without this the pipe error escapes as a bare
+            # traceback and, worse, surfaces again from the garbage collector
+            raise MCPError(f"{self.name}: the server is not running ({exc})") from exc
         if not expect_reply:
             return None
         try:
@@ -199,6 +204,11 @@ class StdioServer(Server):
                            f"in {self.timeout}s") from exc
 
     def close(self) -> None:
+        if self._process and self._process.stdin and not self._process.stdin.closed:
+            try:
+                self._process.stdin.close()   # or its wrapper is collected mid-flush
+            except OSError:
+                pass
         if self._process and self._process.poll() is None:
             self._process.terminate()
             try:
