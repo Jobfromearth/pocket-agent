@@ -13,7 +13,7 @@ after cloning:
 ```bash
 python -m pocket demo     # a scripted tour: memory, the gate, triage, a real tool call
 python -m pocket dashboard # a browser door on 127.0.0.1:7777, sharing one bus with the terminal
-python -m pocket eval     # 125 deterministic checks, offline and free, in under a second
+python -m pocket eval     # 126 deterministic checks, offline and free, in under a second
 python -m pocket gate     # both suites + the verdict CI reads (eval_report.json)
 python -m pocket mcp      # start an MCP server and call a tool through it, no model involved
 python -m pocket team     # three workers over one board: two in parallel, one that waits
@@ -24,7 +24,7 @@ python -m pocket          # chat for real (put a key in .env)
 Inside a chat, `/help` `/tools` `/context` `/memory` `/board` `/dream` `/dream-log`
 `/dream-restore` `/new` are answered by the harness itself and never reach a model.
 
-The core imports **stdlib only** and `pocket/*.py` totals **7,168 lines**; `anthropic` /
+The core imports **stdlib only** and `pocket/*.py` totals **7,194 lines**; `anthropic` /
 `openai` load lazily, and only if you point it at that provider. That line count is not
 decoration — [an eval asserts it is still true](pocket/evals.py), and
 `./scripts/line_budget.sh` prints it per pillar.

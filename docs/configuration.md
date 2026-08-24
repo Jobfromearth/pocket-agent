@@ -51,7 +51,7 @@ smart.
 | `POCKET_WEB` | `1` | register `search_web` and `fetch_url` (both `risk="ask"`) |
 | `POCKET_SUBAGENTS` | `1` | register `delegate` (one sub-task, one sub-agent, in-process) |
 | `POCKET_CODER_TOOL` | `1` | register `delegate_task` (a coding agent, out of process) |
-| `POCKET_CODER` | `pi -p {task} -a --no-session --mode json` | the command `delegate_task` runs; `{task}` is where the instruction goes |
+| `POCKET_CODER` | `pi -p {task} -a --no-session --mode json` | the command `delegate_task` runs; `{task}` is where the instruction goes. stdin is closed, so the agent must be able to write without asking — Claude Code needs `claude -p --permission-mode acceptEdits {task}` |
 | `POCKET_FANOUT_PER_TURN` | `3` | how many sub-agents one turn may start, across all three fan-out tools |
 | `POCKET_TEAM` | `0` | register `assign_team` (several workers over one board) |
 | `POCKET_GRAPH_WORKFLOWS` | `0` | put the triage graph in front of the loop |

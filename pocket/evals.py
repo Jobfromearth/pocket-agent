@@ -1642,6 +1642,19 @@ def test_a_progress_payload_cannot_rename_the_event_it_arrives_as():
     assert seen[0]["event"] == "coder_progress", seen[0]
 
 
+def test_a_coder_that_speaks_utf8_is_not_read_as_the_local_codepage():
+    """`text=True` alone decodes with the LOCALE encoding. On a Chinese Windows
+    install that is GBK, every coding agent writes UTF-8, and the first
+    non-ASCII byte ended the run — throwing away work it had already done."""
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    script = ("import sys; sys.stdout.reconfigure(encoding='utf-8'); "
+              "print('完成 · déjà vu')")
+    speaks = [sys.executable, "-c", script]
+    code, stdout, _stderr = run_command(speaks, home, timeout=60)
+    assert code == 0, code
+    assert "完成" in stdout and "déjà" in stdout, repr(stdout)
+
+
 def test_a_chatty_stderr_does_not_deadlock_a_delegated_run():
     """Draining stdout to EOF and reading stderr afterwards stalls the moment the
     child writes more than a pipe buffer of warnings: it blocks on stderr, stops

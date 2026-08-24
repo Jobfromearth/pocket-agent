@@ -15,9 +15,15 @@ badly would cost the thing this repo is actually for.
     pi        the default (github.com/earendil-works/pi): read / bash / edit /
               write, a JSON event stream, and a headless `-p` mode
     anything  POCKET_CODER is the whole command, with {task} where the
-              instruction goes. `claude -p {task}`, `codex exec {task}`, your
-              own script — the workspace, the manifest and the gate are ours
-              either way, and which binary runs is a config line
+              instruction goes. `codex exec {task}`, your own script — the
+              workspace, the manifest and the gate are ours either way, and
+              which binary runs is a config line
+
+Whatever you point it at has to be able to WRITE without asking, because stdin
+is closed: a coder that stops to request permission cannot be answered and will
+report, accurately, that it did nothing. Claude Code needs a flag for that —
+`claude -p --permission-mode acceptEdits {task}` — and that flag is exactly the
+"it runs as you, with your files" bargain below, spelled out.
 
 A delegated run is the slowest thing this assistant can start, so its output is
 read as it arrives rather than at the end: every line becomes a `coder_progress`
@@ -77,7 +83,12 @@ def run_command(args: list[str], cwd: Path, timeout: float,
     which is exactly the case the timeout exists for."""
     process = subprocess.Popen(
         args, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL, text=True, bufsize=1)
+        stdin=subprocess.DEVNULL, text=True, bufsize=1,
+        # `text=True` alone decodes with the LOCALE encoding, which on a Chinese
+        # Windows install is GBK — and every coding agent writes UTF-8. Without
+        # this the first non-ASCII byte ends the run with a UnicodeDecodeError
+        # and the work it had already done is thrown away.
+        encoding="utf-8", errors="replace")
     # stderr gets its own reader. Draining stdout to EOF first and reading stderr
     # after deadlocks the moment the child writes more than a pipe buffer of
     # warnings: it blocks on stderr, stops producing stdout, and we block on
@@ -206,7 +217,9 @@ def make_coder_tool(home: Path, runner: Callable[..., tuple[int, str, str]] = ru
         except FileNotFoundError:
             return (f"Error: '{args[0]}' is not on PATH. Install pi "
                     f"(github.com/earendil-works/pi), or point POCKET_CODER at a coding "
-                    f"agent you do have, e.g. POCKET_CODER='claude -p {{task}}'.")
+                    f"agent you do have — e.g. "
+                    f"POCKET_CODER='claude -p --permission-mode acceptEdits {{task}}', "
+                    f"which it needs in order to write without asking.")
         except subprocess.TimeoutExpired:
             return f"Error: {args[0]} did not finish within {int(timeout)}s in {workspace}."
         except OSError as exc:

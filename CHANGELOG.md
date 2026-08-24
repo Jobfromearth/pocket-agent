@@ -243,7 +243,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 125 deterministic cases.
+**Evals:** 46 → 126 deterministic cases.
 
 ## 0.3.0
 
