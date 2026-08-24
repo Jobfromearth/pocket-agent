@@ -23,7 +23,7 @@ python -m pocket telegram      # the chat door (needs a token and an allow-list)
 python -m pocket mcp           # connect MCP servers and prove one call
 pytest pocket/evals.py         # the same cases under pytest
 ruff check pocket              # lint, same as CI
-./scripts/line_budget.sh       # lines per pillar + the number the README states
+./scripts/line_budget.sh       # lines per pillar, when you want to see where it went
 ```
 
 Everything above runs offline, with no key and no install. Keep it that way.
@@ -55,9 +55,7 @@ Everything above runs offline, with no key and no install. Keep it that way.
 6. **Nothing is deleted to save context.** Offload it or summarise it; the row in
    `state.db` stays.
 7. **Docs are part of the change.** If you add a knob, it goes in
-   `docs/configuration.md` and `.env.example`. If you change the line count, run
-   `./scripts/line_budget.sh` and update the number in the README — an eval
-   asserts the README is telling the truth.
+   `docs/configuration.md` and `.env.example`.
 
 ## Style
 

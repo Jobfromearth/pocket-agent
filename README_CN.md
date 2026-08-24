@@ -7,21 +7,18 @@
 
 我想要一个记得住我的生活、又跑在我自己机器上的助理——不是租来的产品，也不是把最有意思的部分藏在
 三层抽象后面的框架。所以我写了「还能称之为严肃 Agent」的最小版本，并且让每一部分都可读：
-**一个机制，一个文件，没有一个文件超过 371 行。**
+**一个机制，一个文件。**
 
 demo、评测套件和 MCP 往返**都不需要 API key、不需要网络**，克隆完十秒就能看到它跑起来。
 
 ```bash
 python -m pocket demo        # 脚本化巡演：记忆、门控、分诊、一次真实的工具调用
-python -m pocket eval        # 126 条确定性评测，离线，一秒内跑完
+python -m pocket eval        # 125 条确定性评测，离线，一秒内跑完
 python -m pocket dashboard   # 浏览器入口 127.0.0.1:7777，与这个终端共用一条消息总线
 python -m pocket mcp         # 启一个 MCP server 并真的调一次工具，全程不涉及模型
 python -m pocket team        # 三个 worker 共用一块看板：两个并行，一个等依赖
 python -m pocket             # 真正对话（在 .env 里放一个 key）
 ```
-
-`pocket/*.py` 合计 **7,194 行**——其中 5,316 行是机制，1,878 行是证明它没错的评测套件。这个数字
-不是装饰：[有一条评测断言它仍然属实](pocket/evals.py)，`./scripts/line_budget.sh` 会按支柱打印。
 
 ## 一轮是怎么走的
 
@@ -134,6 +131,6 @@ flowchart LR
 四支柱结构和少数核心例程是从 [waku-agent](https://github.com/ShenSeanChen/waku-agent)（MIT）
 重新实现并裁剪而来——那是功能完整的版本：仪表盘、语音与聊天网关、可插拔记忆后端。另外两个项目
 是读过、致谢并借鉴，而不是依赖：[nanobot](https://github.com/HKUDS/nanobot) 贡献了终端 `/` 命令
-的思路，以及「用脚本让 README 里的行数不会烂掉」这个习惯；[ClawTeam](https://github.com/HKUDS/ClawTeam)
-贡献了看板——计划是数据、看板状态、以及「宁可说这件事没发生，也不要拿缺失的输入往下跑」这条纪律。
-两者都不是依赖，都值得完整读一遍。MIT 许可。
+的思路；[ClawTeam](https://github.com/HKUDS/ClawTeam) 贡献了看板——计划是数据、看板状态、以及
+「宁可说这件事没发生，也不要拿缺失的输入往下跑」这条纪律。两者都不是依赖，都值得完整读一遍。
+MIT 许可。

@@ -8,23 +8,19 @@
 I wanted an assistant that remembers my life and runs on my own machine — not a product I
 rent, and not a framework that hides the interesting parts behind three layers of
 abstraction. So I wrote the smallest thing that still has every part a serious agent needs,
-and kept every part readable: **one mechanism, one file, no file longer than 371 lines.**
+and kept every part readable: **one mechanism, one file.**
 
 The demo, the eval suite and the MCP round trip all run **with no API key and no network**,
 so you can watch it work ten seconds after cloning.
 
 ```bash
 python -m pocket demo        # a scripted tour: memory, the gate, triage, a real tool call
-python -m pocket eval        # 126 deterministic checks, offline, in under a second
+python -m pocket eval        # 125 deterministic checks, offline, in under a second
 python -m pocket dashboard   # a browser door on 127.0.0.1:7777, sharing one bus with this terminal
 python -m pocket mcp         # start an MCP server and call a tool through it, no model involved
 python -m pocket team        # three workers over one board: two in parallel, one that waits
 python -m pocket             # chat for real (put a key in .env)
 ```
-
-`pocket/*.py` totals **7,194 lines** — 5,316 of mechanism and 1,878 of the suite that proves
-it. That number is not decoration: [an eval asserts it is still true](pocket/evals.py), and
-`./scripts/line_budget.sh` prints it per pillar.
 
 ## One turn
 
@@ -144,7 +140,7 @@ The four-pillar structure and a few core routines are re-implemented and trimmed
 [waku-agent](https://github.com/ShenSeanChen/waku-agent) (MIT) — the full-featured version,
 with a dashboard, voice and chat gateways and pluggable memory backends. Two more projects
 are read and borrowed from rather than depended on: [nanobot](https://github.com/HKUDS/nanobot)
-for the terminal client's `/` commands and the habit of a script that keeps the line count
-honest; [ClawTeam](https://github.com/HKUDS/ClawTeam) for the board — a plan as data, kanban
+for the terminal client's `/` commands; [ClawTeam](https://github.com/HKUDS/ClawTeam) for
+the board — a plan as data, kanban
 states, and the discipline of saying "this did not happen" instead of running a step on
 missing input. Neither is a dependency; both are worth reading in full. MIT licensed.

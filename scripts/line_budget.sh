@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# The line budget, per pillar. `pocket` claims to be small enough to read in one
-# evening, and a claim nobody can check is a claim that rots — so the number in
-# the README is printed here and asserted by the eval suite
-# (`test_the_line_count_in_the_readme_is_still_true`).
+# Where the lines went, per pillar. Not a gate — a thing to glance at when a
+# pillar starts growing faster than the reason it exists.
 #
-#   ./scripts/line_budget.sh          # the table, and the total to paste back
+#   ./scripts/line_budget.sh
 #
 # Borrowed, gratefully, from nanobot's core_agent_lines.sh.
 set -euo pipefail

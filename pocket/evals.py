@@ -25,7 +25,6 @@ like one that did.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -1763,20 +1762,6 @@ def test_the_dashboard_chat_endpoint_refuses_a_cross_site_post():
         bus.stop()
 
 
-# -------------------------------------------------------------- the README
-def test_the_line_count_in_the_readme_is_still_true():
-    """nanobot ships core_agent_lines.sh so the number in its README cannot rot.
-    Same idea, made a gate: the claim is checked against the files it describes.
-    `scripts/line_budget.sh` prints the number to paste back in."""
-    readme = Path(__file__).resolve().parent.parent / "README.md"
-    if not readme.is_file():
-        return                              # installed as a wheel: nothing to check
-    claim = re.search(r"totals \*\*([\d,]+) lines\*\*", readme.read_text(encoding="utf-8"))
-    assert claim, "the README no longer states a line count"
-    claimed = int(claim.group(1).replace(",", ""))
-    actual = sum(len(path.read_text(encoding="utf-8").splitlines())
-                 for path in sorted(Path(__file__).parent.glob("*.py")))
-    assert abs(actual - claimed) <= 50, f"README says {claimed} lines; pocket/*.py is {actual}"
 
 
 def pytest_skip_hook(func):
