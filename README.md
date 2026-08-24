@@ -13,7 +13,7 @@ after cloning:
 ```bash
 python -m pocket demo     # a scripted tour: memory, the gate, triage, a real tool call
 python -m pocket dashboard # a browser door on 127.0.0.1:7777, sharing one bus with the terminal
-python -m pocket eval     # 95 deterministic checks, offline and free, in under a second
+python -m pocket eval     # 100 deterministic checks, offline and free, in under a second
 python -m pocket gate     # both suites + the verdict CI reads (eval_report.json)
 python -m pocket mcp      # start an MCP server and call a tool through it, no model involved
 python -m pocket team     # three workers over one board: two in parallel, one that waits
@@ -21,10 +21,10 @@ python -m pocket tools    # what the model can call — and what it may do witho
 python -m pocket          # chat for real (put a key in .env)
 ```
 
-Inside a chat, `/help` `/tools` `/context` `/memory` `/board` `/new` are answered by the
-harness itself and never reach a model.
+Inside a chat, `/help` `/tools` `/context` `/memory` `/board` `/dream` `/dream-log`
+`/dream-restore` `/new` are answered by the harness itself and never reach a model.
 
-The core imports **stdlib only** and `pocket/*.py` totals **5,729 lines**; `anthropic` /
+The core imports **stdlib only** and `pocket/*.py` totals **6,033 lines**; `anthropic` /
 `openai` load lazily, and only if you point it at that provider. That line count is not
 decoration — [an eval asserts it is still true](pocket/evals.py), and
 `./scripts/line_budget.sh` prints it per pillar.
@@ -36,7 +36,7 @@ decoration — [an eval asserts it is still true](pocket/evals.py), and
 | **Harness** | `config.py` `session.py` `agent.py` `__main__.py` `hooks.py` | working-memory assembly, wiring, and five moments a hook may interrupt |
 | **Doors** | `bus.py` `dashboard.py` `telegram.py` | terminal, browser and chat, converging on one serialised session |
 | **Loop** | `loop.py` `models.py` `tools.py` | reason→act→observe with two guardrails; 2 wire formats behind one loop |
-| **Memory** | `memory.py` `db.py` `skills.py` | semantic (FTS5) / episodic / procedural, a retrieval gate, consolidation, two-level skill disclosure, and the three tools that edit all of it |
+| **Memory** | `memory.py` `db.py` `skills.py` `dream.py` | semantic (FTS5) / episodic / procedural, a retrieval gate, two-level skill disclosure, the three tools that edit all of it, and a consolidation history you can walk back |
 | **Context** | `context.py` | four steps, cheapest first: offload, fit, compact, react — and a way back from each |
 | **Reach** | `mcp.py` `web.py` `subagent.py` | MCP tools from other people's servers; the open web behind one guarded opener; delegation to a scoped sub-agent |
 | **Team** | `team.py` | several workers over one shared board, scheduled by their dependencies |

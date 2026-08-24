@@ -23,6 +23,7 @@ import json
 import os
 import sys
 
+from pocket import dream
 from pocket.agent import Pocket, compose
 from pocket.bus import Bus
 from pocket.config import load_settings
@@ -65,6 +66,9 @@ COMMANDS = """\
   /context   what goes into the next prompt, and how close it is to its budget
   /memory    what is remembered, and where the mirror on disk is
   /board     every team task this database has run, newest team first
+  /dream     consolidate now, without waiting for the exchange count
+  /dream-log [sha]   what consolidation has decided, or one run in detail
+  /dream-restore <sha>   retract exactly the facts one run added
   /new       start a fresh conversation (memory, board and traces are kept)
   /quit      leave"""
 
@@ -102,6 +106,24 @@ def command(pocket: Pocket, message: str) -> str | None:
         return (f"  facts {counts['facts']} · episodes {counts['episodes']} · "
                 f"messages {counts['chat_log']} · skills {len(pocket.memory.skills.skills)}\n"
                 f"  mirror: {pocket.settings.home / 'MEMORY.md'} (source of truth: state.db)")
+    if verb == "/dream":
+        added = pocket.memory.maybe_consolidate(notify=show)
+        pocket.memory.export_markdown()
+        if not added:
+            return ("  nothing to consolidate yet — it needs "
+                    f"{pocket.settings.consolidate_every} exchanges it has not read.")
+        return f"  distilled {added} fact(s).\n{dream.render(pocket.conn, limit=1)}"
+    if verb == "/dream-log":
+        rest = message.split(maxsplit=1)
+        return (dream.show(pocket.conn, rest[1]) if len(rest) > 1
+                else dream.render(pocket.conn))
+    if verb == "/dream-restore":
+        rest = message.split(maxsplit=1)
+        if len(rest) < 2:
+            return "  usage: /dream-restore <sha>   (/dream-log lists them)"
+        answer = dream.restore(pocket.conn, rest[1])
+        pocket.memory.export_markdown()
+        return answer
     if verb == "/board":
         rows = pocket.conn.execute(
             "SELECT team, key, status, result FROM tasks ORDER BY id DESC LIMIT 20").fetchall()

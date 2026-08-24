@@ -47,6 +47,7 @@ you > Book a catch-up with Alex tomorrow
 | `models.py` | providers: Anthropic shape, OpenAI shape, offline stub |
 | `tools.py` | the registry: name, schema, function, risk |
 | `memory.py` | semantic / episodic / procedural, gate, consolidation |
+| `dream.py` | one row per consolidation run: read it back, or walk it back |
 | `skills.py` | the catalog that always ships, and the body that does not |
 | `hooks.py` | five moments a turn can be interrupted at, and the veto |
 | `injection.py` | classify untrusted output, fence it, escalate the next call |

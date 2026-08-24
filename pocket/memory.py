@@ -22,6 +22,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
+from pocket import dream
 from pocket.config import Settings
 from pocket.skills import SkillLoader
 from pocket.tools import Tool
@@ -172,7 +173,10 @@ class Memory:
     def maybe_consolidate(self, notify=None) -> int:
         """The whiteboard's diamond: only consolidate after N new exchanges.
         Summarising after every message is noisy and wasteful; a batch gives the
-        summariser enough context to find facts worth keeping."""
+        summariser enough context to find facts worth keeping.
+
+        Every run that writes anything is recorded in `dream_runs` with the ids
+        it created, so it can be read back and walked back — see dream.py."""
         rows = self.conn.execute(
             "SELECT id, role, content FROM chat_log WHERE consolidated = 0 ORDER BY id").fetchall()
         if len(rows) < self.settings.consolidate_every * 2:     # 2 rows per exchange
@@ -180,23 +184,36 @@ class Memory:
         log = "\n".join(f"{r['role']}: {r['content']}" for r in rows)
         try:
             distilled = _json_reply(self.client, self.settings.small_model,
-                                    SUMMARISER_PROMPT.format(log=log), max_tokens=2048)
+                                    dream.load_prompt(self.settings.home).format(log=log),
+                                    max_tokens=2048)
         except Exception:
             return 0            # never lose the log: it stays unconsolidated for next time
         if distilled is None:
             return 0
+        mirror = self.settings.home / "MEMORY.md"
+        before = mirror.read_text(encoding="utf-8") if mirror.exists() else ""
+        fact_ids: list[int] = []
         for fact in distilled.get("facts", []):
             if fact.get("subject") and fact.get("content"):
                 self.facts.add(fact["subject"], fact["content"], source="consolidation")
+                fact_ids.append(self.conn.execute(
+                    "SELECT last_insert_rowid() id").fetchone()["id"])
+        episode_id = None
         if distilled.get("episode"):
             self.episodes.add(distilled["episode"], happened_at=date.today().isoformat())
+            episode_id = self.conn.execute("SELECT last_insert_rowid() id").fetchone()["id"]
         self.conn.execute(
             f"UPDATE chat_log SET consolidated = 1 WHERE id IN ({','.join('?' * len(rows))})",
             [r["id"] for r in rows])
         self.conn.commit()
-        count = len(distilled.get("facts", []))
-        if count and notify:
-            notify("consolidation", {"new_facts": count})
+        count = len(fact_ids)
+        sha = ""
+        if count or episode_id:
+            sha = dream.record(self.conn, self.settings.home, exchanges=len(rows),
+                               fact_ids=fact_ids, episode_id=episode_id,
+                               episode=distilled.get("episode", ""), mirror_before=before)
+        if sha and notify:
+            notify("consolidation", {"new_facts": count, "dream": sha})
         return count
 
     def export_markdown(self) -> None:

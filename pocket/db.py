@@ -73,6 +73,20 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS tasks_by_team ON tasks (team, id);
 
+-- one row per consolidation run: what it read, what it created, and whether
+-- it has been walked back. See dream.py for why a run needs a name.
+CREATE TABLE IF NOT EXISTS dream_runs (
+    id INTEGER PRIMARY KEY,
+    sha TEXT NOT NULL UNIQUE,
+    ran_at TEXT NOT NULL,
+    exchanges INTEGER DEFAULT 0,
+    fact_ids TEXT DEFAULT '',
+    episode_id INTEGER,
+    episode TEXT DEFAULT '',
+    mirror_before TEXT DEFAULT '',
+    restored_at TEXT
+);
+
 -- raw chat log; consolidation reads the rows it has not distilled yet
 CREATE TABLE IF NOT EXISTS chat_log (
     id INTEGER PRIMARY KEY,

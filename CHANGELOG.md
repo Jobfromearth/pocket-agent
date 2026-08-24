@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+**Consolidation has a history you can walk back.** `dream.py` — every run that
+writes anything records the fact ids and episode it created, how many exchanges
+it read, and MEMORY.md as it stood before, under an eight-character sha.
+`/dream` runs one now, `/dream-log` lists them, `/dream-log <sha>` shows what one
+decided, `/dream-restore <sha>` retracts exactly the facts that run added.
+
+Consolidation is the one background job here that can quietly make the assistant
+wrong about your life — a model deciding, unsupervised, what you will be
+remembered as believing — and it had left no way to see or undo that.
+
+`restore` is not a snapshot rollback: a snapshot would also undo what you told
+the assistant since. It retracts that run's facts and nothing else, and it
+retracts rather than deletes. The prompt that guides it is `.pocket/dream.md`,
+written on first run and read on every one after, so what counts as worth
+remembering is a file you edit rather than a constant you fork the repo to
+change — and an edit that loses `{log}` falls back instead of sending a prompt
+with no input in it.
+
 **The assistant can edit its own memory.** `manage_memory` (search, correct,
 forget), `update_soul` (a standing rule, appended under a "Learned rules"
 heading in the STABLE half of the prompt so it does not cost the cache every
@@ -125,7 +143,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 95 deterministic cases.
+**Evals:** 46 → 100 deterministic cases.
 
 ## 0.3.0
 

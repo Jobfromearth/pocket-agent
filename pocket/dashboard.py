@@ -31,6 +31,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from pocket import dream
+
 PAGE = Path(__file__).parent / "dashboard.html"
 # The SQL browser reads these and nothing else. An allow-list rather than a
 # parser: "which tables may a browser tab see" is a question with a short answer.
@@ -80,6 +82,7 @@ class Panels:
                                     "ORDER BY id DESC LIMIT ?", (ROW_LIMIT,)),
             "skills": [{"name": s.name, "description": s.description, "body": s.body}
                        for s in self.pocket.memory.skills.skills],
+            "dreams": dream.as_json(self.pocket.conn),
             "mirror": str(self.pocket.settings.home / "MEMORY.md"),
         }
 

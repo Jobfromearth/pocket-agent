@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+from pocket import dream
 from pocket.agent import Pocket
 from pocket.bus import Bus
 from pocket.config import Settings
@@ -1205,6 +1206,84 @@ def test_an_older_database_gains_the_column_it_is_missing():
     assert add_missing_columns(old) == ["facts.forgotten"]
     assert add_missing_columns(old) == [], "a second run must be a no-op"
     assert old.execute("SELECT forgotten FROM facts").fetchall() == []
+
+
+# --------------------------------------------------- dream: a memory you can walk back
+def _dreamed(pocket):
+    """Push enough exchanges through to trigger one consolidation, and return
+    the run it recorded."""
+    for i in range(pocket.settings.consolidate_every + 1):
+        pocket.respond(f"Remember that project{i} ships on Friday")
+    runs = dream.runs(pocket.conn)
+    assert runs, "consolidation should have recorded a run"
+    return runs[0]
+
+
+def test_a_consolidation_run_records_exactly_what_it_created():
+    """Not a guess reconstructed from timestamps: the ids themselves."""
+    pocket = build_agent(consolidate_every=2)
+    run = _dreamed(pocket)
+    ids = [int(i) for i in run["fact_ids"].split(",") if i]
+    assert ids, run["fact_ids"]
+    sources = {pocket.conn.execute("SELECT source FROM facts WHERE id = ?", (i,)
+                                   ).fetchone()["source"] for i in ids}
+    assert sources == {"consolidation"}, sources
+    assert run["exchanges"] >= 4 and len(run["sha"]) == 8, dict(run)
+    assert dream.show(pocket.conn, run["sha"]).count("+ [") == len(ids)
+
+
+def test_restoring_a_dream_retracts_its_facts_and_nothing_else():
+    """A snapshot rollback would also undo what you told it since. This does not."""
+    pocket = build_agent(consolidate_every=2, confirm=lambda *a: True)
+    run = _dreamed(pocket)
+    ids = [int(i) for i in run["fact_ids"].split(",") if i]
+    pocket.tools.execute("save_note", {"subject": "sam", "content": "Sam runs on Tuesdays"})
+
+    answer = dream.restore(pocket.conn, run["sha"])
+    assert "retracted" in answer, answer
+    assert all(pocket.conn.execute("SELECT forgotten FROM facts WHERE id = ?", (i,)
+                                   ).fetchone()["forgotten"] == 1 for i in ids)
+    assert pocket.memory.facts.search("sam tuesdays"), "a fact from outside the run survives"
+    assert "already restored" in dream.restore(pocket.conn, run["sha"]), "restore is idempotent"
+
+
+def test_an_unknown_sha_is_a_sentence_not_a_traceback():
+    pocket = build_agent()
+    assert "no dream named" in dream.show(pocket.conn, "deadbeef")
+    assert "no dream named" in dream.restore(pocket.conn, "deadbeef")
+    assert "no dream has run yet" in dream.render(pocket.conn)
+
+
+def test_the_dream_prompt_is_a_file_you_can_edit():
+    """What counts as worth remembering should not need a fork of this repo."""
+    pocket = build_agent()
+    path = pocket.settings.home / dream.PROMPT_FILE
+    assert dream.load_prompt(pocket.settings.home) == dream.DEFAULT_PROMPT
+    assert path.exists(), "the default is written out on first read"
+    path.write_text("Only remember people. {log}", encoding="utf-8")
+    assert dream.load_prompt(pocket.settings.home).startswith("Only remember people.")
+    path.write_text("a guide with no place to put the log", encoding="utf-8")
+    assert dream.load_prompt(pocket.settings.home) == dream.DEFAULT_PROMPT, \
+        "an edit that drops {log} must fall back, not send a prompt with no input"
+
+
+def test_the_dream_commands_are_answered_without_a_model_call():
+    from pocket.__main__ import command
+
+    pocket = build_agent(consolidate_every=2)
+    run = _dreamed(pocket)
+    before = pocket.client.calls
+    assert run["sha"] in command(pocket, "/dream-log")
+    assert "+ [" in command(pocket, f"/dream-log {run['sha']}")
+    assert "usage:" in command(pocket, "/dream-restore")
+    assert "retracted" in command(pocket, f"/dream-restore {run['sha']}")
+    assert pocket.client.calls == before, "reading and undoing memory must cost nothing"
+    live = pocket.conn.execute("SELECT COUNT(*) c FROM facts WHERE source = 'consolidation' "
+                               "AND forgotten = 0").fetchone()["c"]
+    assert live == 0, "the run's own facts are retracted"
+    told = pocket.conn.execute("SELECT COUNT(*) c FROM facts WHERE source = 'user' "
+                               "AND forgotten = 0").fetchone()["c"]
+    assert told > 0, "what the user said directly is not part of the dream and survives it"
 
 
 # -------------------------------------------------------------- the README
