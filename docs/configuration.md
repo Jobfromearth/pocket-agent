@@ -123,9 +123,19 @@ on the deterministic suite alone. `skipped` is never `pass`.
 `.pocket/mcp.json` — the same shape every MCP client uses:
 
 ```json
-{"servers": {"demo": {"command": ["python3", "-m", "pocket.examples.demo_server"],
-                      "timeout": 20.0}}}
+{"servers": {
+  "demo":   {"command": ["python3", "-m", "pocket.examples.demo_server"], "timeout": 20.0},
+  "remote": {"url": "https://example.com/mcp",
+             "headers": {"Authorization": "Bearer ..."}}}}
 ```
+
+`command` means stdio (a child process); `url` means Streamable HTTP (a server
+somebody else runs). One key decides, because a config that needs a `transport`
+field is a config with two ways to be wrong. An HTTP endpoint is deliberately
+*not* behind `web.py`'s public-address guard: that guard exists because a model
+can be talked into fetching a URL a web page named, while an MCP endpoint is a
+URL you wrote into this file — and the most ordinary one is
+`http://127.0.0.1:3000`.
 
 Tools arrive as `mcp__<server>__<tool>`, marked `risk="ask"`. A server that
 fails to start is reported once and skipped — never fatal. `python -m pocket mcp`

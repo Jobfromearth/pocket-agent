@@ -13,7 +13,7 @@ after cloning:
 ```bash
 python -m pocket demo     # a scripted tour: memory, the gate, triage, a real tool call
 python -m pocket dashboard # a browser door on 127.0.0.1:7777, sharing one bus with the terminal
-python -m pocket eval     # 100 deterministic checks, offline and free, in under a second
+python -m pocket eval     # 105 deterministic checks, offline and free, in under a second
 python -m pocket gate     # both suites + the verdict CI reads (eval_report.json)
 python -m pocket mcp      # start an MCP server and call a tool through it, no model involved
 python -m pocket team     # three workers over one board: two in parallel, one that waits
@@ -24,7 +24,7 @@ python -m pocket          # chat for real (put a key in .env)
 Inside a chat, `/help` `/tools` `/context` `/memory` `/board` `/dream` `/dream-log`
 `/dream-restore` `/new` are answered by the harness itself and never reach a model.
 
-The core imports **stdlib only** and `pocket/*.py` totals **6,033 lines**; `anthropic` /
+The core imports **stdlib only** and `pocket/*.py` totals **6,304 lines**; `anthropic` /
 `openai` load lazily, and only if you point it at that provider. That line count is not
 decoration — [an eval asserts it is still true](pocket/evals.py), and
 `./scripts/line_budget.sh` prints it per pillar.
@@ -38,7 +38,7 @@ decoration — [an eval asserts it is still true](pocket/evals.py), and
 | **Loop** | `loop.py` `models.py` `tools.py` | reason→act→observe with two guardrails; 2 wire formats behind one loop |
 | **Memory** | `memory.py` `db.py` `skills.py` `dream.py` | semantic (FTS5) / episodic / procedural, a retrieval gate, two-level skill disclosure, the three tools that edit all of it, and a consolidation history you can walk back |
 | **Context** | `context.py` | four steps, cheapest first: offload, fit, compact, react — and a way back from each |
-| **Reach** | `mcp.py` `web.py` `subagent.py` | MCP tools from other people's servers; the open web behind one guarded opener; delegation to a scoped sub-agent |
+| **Reach** | `mcp.py` `web.py` `subagent.py` | MCP tools over stdio or Streamable HTTP; the open web behind one guarded opener; delegation to a scoped sub-agent |
 | **Team** | `team.py` | several workers over one shared board, scheduled by their dependencies |
 | **Safety** | `permissions.py` `injection.py` | deny list, ask-the-human, per-session grants; untrusted output fenced and the next call escalated — refusals come back as text |
 | **Graph** | `graph.py` | structure *around* the loop: parallel nodes, code routers, fail-open |
@@ -241,9 +241,9 @@ that starter config, connects, and makes one real call so you can see the protoc
   traced but not priced. Dollars are estimates from a small table; tokens are the truth.
 - Keyword search (FTS5), not embeddings. For one person's facts, ranked keyword search is
   fast, local, and inspectable with `sqlite3`.
-- The MCP client covers stdio, `server/discover`, `tools/list` and `tools/call`. Streamable
-  HTTP, resources, prompts and multi round-trip input requests are not implemented — an
-  `input_required` result is reported honestly instead of being half-answered.
+- The MCP client covers stdio and Streamable HTTP, `server/discover`, `tools/list` and
+  `tools/call`. Resources, prompts and multi round-trip input requests are not implemented —
+  an `input_required` result is reported honestly instead of being half-answered.
 
 ## 中文速览
 

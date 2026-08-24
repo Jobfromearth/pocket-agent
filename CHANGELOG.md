@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**MCP over Streamable HTTP.** `mcp.py` splits into a protocol half and a
+transport half: `Server` owns `_meta`, the `server/discover` probe, `tools/list`
+and `tools/call` and knows nothing about pipes or sockets, so the new transport
+is fifty lines rather than a fork. `HttpServer` POSTs JSON-RPC and reads back
+either a JSON object or an SSE stream — the id picks our reply out of a stream
+that may carry other traffic first — and carries `Mcp-Session-Id` when a
+stateful server hands one out. `command` in `mcp.json` means stdio, `url` means
+HTTP.
+
+The HTTP endpoint is deliberately not behind `web.py`'s public-address guard.
+That guard exists because a model can be talked into fetching a URL a web page
+named; an MCP endpoint is a URL you wrote into your own config, and the most
+ordinary one is `http://127.0.0.1:3000`.
+
 **Consolidation has a history you can walk back.** `dream.py` — every run that
 writes anything records the fact ids and episode it created, how many exchanges
 it read, and MEMORY.md as it stood before, under an eight-character sha.
@@ -143,7 +157,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 100 deterministic cases.
+**Evals:** 46 → 105 deterministic cases.
 
 ## 0.3.0
 

@@ -54,7 +54,7 @@ you > Book a catch-up with Alex tomorrow
 | `telegram.py` | the chat door: an allow-list, a long poll, and `bus.submit()` |
 | `db.py` | the schema, and the one connection everything shares |
 | `context.py` | offload, fit, compact, react — and `read_artifact` / `read_history` back |
-| `mcp.py` | an MCP client for other people's servers |
+| `mcp.py` | an MCP client: one protocol, two transports (stdio, Streamable HTTP) |
 | `web.py` | the open web: search and fetch, and the guard on what may be reached |
 | `permissions.py` | deny list, ask-the-human, session grants |
 | `subagent.py` | one sub-task, one sub-agent, one result |

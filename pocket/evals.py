@@ -19,9 +19,13 @@ import json
 import re
 import sys
 import tempfile
+import threading
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 from pocket import dream
 from pocket.agent import Pocket
@@ -32,7 +36,13 @@ from pocket.dashboard import Panels
 from pocket.graph import build_triage_graph, run_graph
 from pocket.judge import build_judge, cost_weighted_accuracy, run_judged, score_reply
 from pocket.loop import run_loop
-from pocket.mcp import StdioServer, connect_servers
+from pocket.mcp import (
+    HttpServer,
+    MCPError,
+    StdioServer,
+    build_server,
+    connect_servers,
+)
 from pocket.memory import fts_query
 from pocket.models import ScriptedClient
 from pocket.permissions import Policy
@@ -1284,6 +1294,120 @@ def test_the_dream_commands_are_answered_without_a_model_call():
     told = pocket.conn.execute("SELECT COUNT(*) c FROM facts WHERE source = 'user' "
                                "AND forgotten = 0").fetchone()["c"]
     assert told > 0, "what the user said directly is not part of the dream and survives it"
+
+
+# ------------------------------------------------------- MCP over Streamable HTTP
+class _FakeMCP(BaseHTTPRequestHandler):
+    """A real HTTP MCP server, small enough to read. `dialect` decides whether it
+    answers as JSON or as an event stream, and whether it hands out a session."""
+
+    dialect = "json"
+    seen_sessions: ClassVar[list] = []
+
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        self.seen_sessions.append(self.headers.get("Mcp-Session-Id"))
+        method, request_id = body.get("method"), body.get("id")
+        if request_id is None:                       # a notification
+            self.send_response(202)
+            self.end_headers()
+            return
+        results = {
+            "server/discover": {"supportedVersions": ["2026-07-28"]},
+            "tools/list": {"tools": [{"name": "echo", "description": "say it back",
+                                      "inputSchema": {"type": "object", "properties": {}}}]},
+            "tools/call": {"content": [{"type": "text", "text": "echoed"}]},
+        }
+        reply = {"jsonrpc": "2.0", "id": request_id, "result": results.get(method, {})}
+        if self.dialect == "sse":
+            # the stream carries other traffic first: the id is what picks ours out
+            payload = ("event: message\ndata: " + json.dumps(
+                {"jsonrpc": "2.0", "method": "notifications/progress", "params": {}})
+                + "\n\ndata: " + json.dumps(reply) + "\n\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+        else:
+            payload = json.dumps(reply).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+        if self.dialect == "session":
+            self.send_header("Mcp-Session-Id", "sess-42")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+@contextmanager
+def _mcp_over_http(dialect: str = "json"):
+    handler = type("Handler", (_FakeMCP,), {"dialect": dialect, "seen_sessions": []})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/mcp", handler
+    finally:
+        server.shutdown()
+
+
+def test_the_http_transport_reaches_a_server_this_process_did_not_start():
+    """The point of the second transport: a server somebody else runs."""
+    with _mcp_over_http() as (url, _handler):
+        registry = ToolRegistry(policy=Policy(confirm=lambda *a: True))
+        events = []
+        servers = connect_servers(registry, {"remote": {"url": url}},
+                                  notify=lambda kind, ev: events.append((kind, ev)))
+        try:
+            assert registry.names() == ["mcp__remote__echo"], registry.names()
+            assert registry.execute("mcp__remote__echo", {}) == "echoed"
+            assert servers[0].transport == "http" and servers[0].mode == "stateless"
+            assert events[0][1]["transport"] == "http", events
+        finally:
+            for server in servers:
+                server.close()
+
+
+def test_an_event_stream_answer_is_read_like_a_json_one():
+    """One POST may be answered either way, and the stream can carry other
+    traffic before ours — which is why the id does the picking."""
+    with _mcp_over_http("sse") as (url, _handler):
+        server = HttpServer("remote", url)
+        server.start()
+        assert server.list_tools()[0]["name"] == "echo"
+        assert server.call("echo", {}) == "echoed"
+
+
+def test_a_session_a_server_hands_out_comes_back_on_every_later_request():
+    with _mcp_over_http("session") as (url, handler):
+        server = HttpServer("remote", url)
+        server.start()
+        server.list_tools()
+        assert server.session == "sess-42"
+        assert handler.seen_sessions[0] is None, "the first request cannot know it yet"
+        assert handler.seen_sessions[-1] == "sess-42", handler.seen_sessions
+
+
+def test_one_key_decides_the_transport():
+    """A config that needs a `transport` field is a config with two ways to be
+    wrong."""
+    assert build_server("a", {"command": ["x"]}).transport == "stdio"
+    assert build_server("b", {"url": "http://x/mcp"}).transport == "http"
+    try:
+        build_server("c", {"timeout": 5})
+    except MCPError as exc:
+        assert "either a `command`" in str(exc), exc
+        return
+    raise AssertionError("a server with neither must be refused")
+
+
+def test_an_unreachable_http_server_is_reported_and_skipped():
+    registry = ToolRegistry()
+    events = []
+    servers = connect_servers(registry, {"gone": {"url": "http://127.0.0.1:9/mcp", "timeout": 2}},
+                              notify=lambda kind, ev: events.append((kind, ev)))
+    assert servers == [] and registry.names() == []
+    assert any(kind == "mcp_error" for kind, _ in events), events
 
 
 # -------------------------------------------------------------- the README
