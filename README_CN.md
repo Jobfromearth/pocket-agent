@@ -11,7 +11,7 @@
 ```bash
 python -m pocket demo     # 一趟脚本化的巡演：记忆、门控、分诊、一次真实的工具调用
 python -m pocket dashboard # 浏览器入口，127.0.0.1:7777，与终端共用同一条消息总线
-python -m pocket eval     # 84 条确定性评测，离线、免费，一秒内跑完
+python -m pocket eval     # 88 条确定性评测，离线、免费，一秒内跑完
 python -m pocket gate     # 双套件 + CI 读的裁决文件（eval_report.json）
 python -m pocket mcp      # 启一个 MCP server 并真的调一次工具，全程不涉及模型
 python -m pocket team     # 三个 worker 共用一块看板：两个并行，一个等依赖
@@ -22,7 +22,7 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
 对话中输入 `/help` `/tools` `/context` `/memory` `/board` `/new`，由 harness 直接回答，
 永远不会送到模型那里。
 
-核心**只依赖标准库**，`pocket/*.py` 合计 **5,353 行**；`anthropic` / `openai` 只有在你指定
+核心**只依赖标准库**，`pocket/*.py` 合计 **5,492 行**；`anthropic` / `openai` 只有在你指定
 对应 provider 时才会惰性导入。那个行数不是装饰——[评测里有一条断言它仍然属实](pocket/evals.py)，
 `./scripts/line_budget.sh` 会按支柱把它打印出来。
 

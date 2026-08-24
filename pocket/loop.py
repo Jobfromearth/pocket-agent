@@ -42,6 +42,7 @@ class LoopResult:
     iterations: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
+    tokens_cached: int = 0
 
 
 TOO_LONG = ("too long", "too many tokens", "context length", "maximum context",
@@ -56,7 +57,8 @@ def is_too_long(exc: Exception) -> bool:
     return any(phrase in text for phrase in TOO_LONG)
 
 
-def run_loop(client, model: str, system: str, messages: list[dict], tools: ToolRegistry,
+def run_loop(client, model: str, system: str | list[str], messages: list[dict],
+             tools: ToolRegistry,
              max_iterations: int = 8, max_tokens: int = 4096,
              observer: Observer | None = None, fit=None) -> LoopResult:
     """Run one agent turn. `messages` is mutated in place, so afterwards it holds
@@ -91,12 +93,16 @@ def run_loop(client, model: str, system: str, messages: list[dict], tools: ToolR
             notify("fit", {"iteration": iteration, "results_shortened": shrunk,
                            "reactive": True, "provider_said": str(exc)[:200]})
             response = ask()
-        result.tokens_in += response.usage.input_tokens
-        result.tokens_out += response.usage.output_tokens
+        usage = response.usage
+        cached = getattr(usage, "cache_read_input_tokens", 0) or 0
+        written = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        result.tokens_in += usage.input_tokens
+        result.tokens_out += usage.output_tokens
+        result.tokens_cached += cached
         notify("llm", {"iteration": iteration, "model": model,
                        "stop_reason": response.stop_reason,
-                       "usage": {"in": response.usage.input_tokens,
-                                 "out": response.usage.output_tokens}})
+                       "usage": {"in": usage.input_tokens, "out": usage.output_tokens,
+                                 "cached": cached, "cache_written": written}})
         messages.append({"role": "assistant", "content": response.content})
 
         tool_uses = [b for b in response.content if b.type == "tool_use"]

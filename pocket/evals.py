@@ -37,7 +37,7 @@ from pocket.models import ScriptedClient
 from pocket.permissions import Policy
 from pocket.team import RESERVED, run_team, worker_tools
 from pocket.tools import Tool, ToolRegistry
-from pocket.trace import spans_or_none
+from pocket.trace import estimate_cost, spans_or_none
 from pocket.web import OPENER, Blocked, GuardedRedirects, check_url, make_web_tools
 
 
@@ -1068,6 +1068,51 @@ def test_without_a_team_the_same_request_stays_in_one_loop():
     assert "assign_team" not in pocket.tools.names()
     result = pocket.respond("Plan a kickoff: remember it, book it and then confirm it")
     assert "assign_team" not in [c["tool"] for c in result.tool_calls]
+
+
+# ------------------------------------------------------------ the prompt cache
+def test_the_breakpoint_lands_after_the_stable_half_and_the_clock_after_it():
+    """A cache matches a PREFIX, so a clock in front of the persona invalidates
+    the persona once a minute. That is what this split exists to prevent."""
+    pocket = build_agent()
+    stable, volatile = pocket.session.build_system_parts("what is 2+2?")
+    assert "You are pocket" in stable and "schedule-meeting" in stable
+    assert "Right now it is" in volatile
+    assert "Right now it is" not in stable, "the clock must not be in the cached half"
+    assert pocket.session.build_system("what is 2+2?") == stable + "\n" + volatile
+
+
+def test_only_the_stable_block_carries_a_cache_breakpoint():
+    from pocket.models import system_blocks
+
+    blocks = system_blocks(["persona and tools", "the clock, and today's memory"])
+    assert len(blocks) == 2
+    assert blocks[0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in blocks[1], "caching the volatile half is worse than not caching"
+    assert system_blocks("just one string")[0]["cache_control"] == {"type": "ephemeral"}
+    assert system_blocks("") == [], "nothing to cache is not an empty breakpoint"
+
+
+def test_cached_tokens_reach_the_ledger_and_the_hit_rate():
+    """The ledger is what makes a cache claim checkable rather than asserted."""
+    pocket = build_agent()
+    pocket.tracer.event("llm", {"model": "claude-sonnet-5",
+                                "usage": {"in": 200, "out": 50, "cached": 800,
+                                          "cache_written": 0}})
+    spend = pocket.tracer.spend()
+    assert spend["cached"] == 800 and spend["in"] == 200
+    assert spend["cache_hit"] == 0.8, spend
+    # 200 fresh + 800 cached at a tenth = the price of 280 fresh input tokens
+    fresh = estimate_cost("claude-sonnet-5", 1000, 50)
+    assert estimate_cost("claude-sonnet-5", 200, 50, cached=800) < fresh
+    assert spend["usd"] > 0
+
+
+def test_an_unreported_cache_is_zero_not_a_guess():
+    pocket = build_agent()
+    pocket.respond("what is 2+2?")
+    spend = pocket.tracer.spend()
+    assert spend["cached"] == 0 and spend["cache_hit"] == 0.0, spend
 
 
 # -------------------------------------------------------------- the README

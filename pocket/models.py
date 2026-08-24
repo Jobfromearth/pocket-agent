@@ -69,13 +69,47 @@ def get_client(settings: Settings):
     if provider.kind == "mock":
         return ScriptedClient()
     if provider.kind == "anthropic":
+        return AnthropicClient(api_key=key, base_url=base_url)
+    return OpenAICompatClient(api_key=key, base_url=base_url)
+
+
+def system_blocks(system: str | list[str]) -> list[dict]:
+    """Anthropic reads the prompt as tools, then system, then messages, so ONE
+    breakpoint at the end of the stable system block covers the tool schemas and
+    the persona together — which is most of what a short turn sends.
+
+    A caller that hands over a plain string gets the breakpoint at the end of it.
+    That is honest but usually worthless: see `Session.build_system_parts` for
+    why anything with a clock in it must come after the breakpoint, not before.
+    """
+    parts = [system] if isinstance(system, str) else [p for p in system if p]
+    blocks = [{"type": "text", "text": part} for part in parts if part]
+    if blocks:
+        blocks[0]["cache_control"] = {"type": "ephemeral"}
+    return blocks
+
+
+class AnthropicClient:
+    """The SDK plus the one thing the loop needs from it that it will not do on
+    its own: mark the stable prefix cacheable. Usage comes back unchanged, so
+    `cache_read_input_tokens` reaches the ledger."""
+
+    def __init__(self, api_key: str, base_url: str | None = None):
         import anthropic
 
-        kwargs = {"api_key": key}
+        kwargs: dict = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
-        return anthropic.Anthropic(**kwargs)
-    return OpenAICompatClient(api_key=key, base_url=base_url)
+        self._client = anthropic.Anthropic(**kwargs)
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, *, model, messages, max_tokens, system=None, tools=None):
+        kwargs: dict = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        if system:
+            kwargs["system"] = system_blocks(system)
+        if tools:
+            kwargs["tools"] = tools
+        return self._client.messages.create(**kwargs)
 
 
 # --------------------------------------------------------------------------
@@ -93,8 +127,14 @@ class OpenAICompatClient:
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
         self.messages = SimpleNamespace(create=self._create)
 
+    @staticmethod
+    def _flatten(system) -> str:
+        """OpenAI-shaped endpoints cache automatically and take one system
+        message, so the split this repo makes for Anthropic just gets joined."""
+        return system if isinstance(system, str) else "\n".join(p for p in system if p)
+
     def _to_openai(self, *, model, messages, max_tokens, system=None, tools=None) -> dict:
-        out = [{"role": "system", "content": system}] if system else []
+        out = [{"role": "system", "content": self._flatten(system)}] if system else []
         for message in messages:
             content = message["content"]
             if isinstance(content, str):
@@ -176,6 +216,8 @@ class ScriptedClient:
 
     def _create(self, *, model, messages, max_tokens, system=None, tools=None):
         self.calls += 1
+        if not isinstance(system, (str, type(None))):
+            system = "\n".join(p for p in system if p)
         last = messages[-1]["content"]
         text = last if isinstance(last, str) else ""
         if "retrieval gate" in text:

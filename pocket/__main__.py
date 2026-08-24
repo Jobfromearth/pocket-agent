@@ -161,6 +161,7 @@ def demo(pocket: Pocket) -> int:
         print(f"pocket > {result.reply}")
     spend = pocket.tracer.spend()
     print(f"\n{spend['calls']} model calls · {spend['in']}+{spend['out']} tokens · "
+          f"{int(spend['cache_hit'] * 100)}% of the prompt came from cache · "
           f"${spend['usd']} (estimated) · trace: {pocket.tracer.path}")
     print(f"memory mirror: {pocket.settings.home / 'MEMORY.md'}")
     return 0

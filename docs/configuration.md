@@ -15,6 +15,13 @@ Every knob is an environment variable read once into `Settings` (`config.py`).
 | `POCKET_MODEL` | provider default | the model that runs the loop |
 | `POCKET_SMALL_MODEL` | provider default | the cheap one: gate, triage, consolidation, compaction |
 
+On Anthropic the system prompt is sent as two blocks with a cache breakpoint after
+the first: persona, provider and the skill catalog are stable for a session, so they
+sit before it; the clock and whatever the retrieval gate pulled in change every turn,
+so they sit after. A prefix that changes every turn is worse than no breakpoint at
+all — a cache write costs more than not caching. `usage.jsonl` records `cached` and
+`cache_written` per call, and `pocket trace` prints the hit rate.
+
 With no key anywhere, the provider is `mock`: a rule-based stub so the demo and
 the eval suite run offline. It proves the harness works, never that a model is
 smart.

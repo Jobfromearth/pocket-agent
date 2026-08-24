@@ -29,6 +29,13 @@ from typing import ClassVar
 
 from pocket.config import Settings
 
+# What a cached input token costs relative to a fresh one. Anthropic's numbers:
+# reading from the cache is a tenth of the price, writing to it is a quarter more
+# than not caching at all — which is why a breakpoint on a prefix that changes
+# every turn is worse than no breakpoint.
+CACHE_READ = 0.1
+CACHE_WRITE = 1.25
+
 # USD per 1M tokens (input, output). Estimates for display only.
 PRICES = {
     "claude-sonnet-5": (3.0, 15.0),
@@ -40,9 +47,15 @@ PRICES = {
 }
 
 
-def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+def estimate_cost(model: str, tokens_in: int, tokens_out: int,
+                  cached: int = 0, written: int = 0) -> float:
+    """`tokens_in` is what the provider billed at full rate; cache reads and
+    writes are counted separately because they are priced separately."""
     price_in, price_out = PRICES.get(model, (0.0, 0.0))
-    return (tokens_in * price_in + tokens_out * price_out) / 1_000_000
+    return (tokens_in * price_in
+            + cached * price_in * CACHE_READ
+            + written * price_in * CACHE_WRITE
+            + tokens_out * price_out) / 1_000_000
 
 
 # The exporter is optional (`pip install pocket-agent[tracing]`) and its failure
@@ -128,9 +141,12 @@ class Tracer:
         if kind == "llm":
             usage = payload.get("usage", {})
             model = payload.get("model", self.settings.model)
+            tokens_in, tokens_out = usage.get("in", 0), usage.get("out", 0)
+            cached, written = usage.get("cached", 0), usage.get("cache_written", 0)
             self._write(self.usage_path, {
-                "model": model, "in": usage.get("in", 0), "out": usage.get("out", 0),
-                "usd": round(estimate_cost(model, usage.get("in", 0), usage.get("out", 0)), 6)})
+                "model": model, "in": tokens_in, "out": tokens_out,
+                "cached": cached, "cache_written": written,
+                "usd": round(estimate_cost(model, tokens_in, tokens_out, cached, written), 6)})
 
     @contextmanager
     def turn(self, user_message: str):
@@ -157,9 +173,19 @@ class Tracer:
                 if line.strip()]
 
     def spend(self) -> dict:
+        """`cache_hit` is cached / (cached + fresh input): the share of the prompt
+        the provider did not have to read again. It is 0 on providers that do not
+        report cache tokens, which is honest — an unknown rate is not a good one."""
+        empty = {"calls": 0, "in": 0, "out": 0, "cached": 0, "usd": 0.0, "cache_hit": 0.0}
         if not self.usage_path.exists():
-            return {"calls": 0, "in": 0, "out": 0, "usd": 0.0}
+            return empty
         rows = [json.loads(line) for line in
                 self.usage_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        return {"calls": len(rows), "in": sum(r["in"] for r in rows),
-                "out": sum(r["out"] for r in rows), "usd": round(sum(r["usd"] for r in rows), 4)}
+        if not rows:
+            return empty
+        tokens_in = sum(r["in"] for r in rows)
+        cached = sum(r.get("cached", 0) for r in rows)
+        return {"calls": len(rows), "in": tokens_in,
+                "out": sum(r["out"] for r in rows), "cached": cached,
+                "usd": round(sum(r["usd"] for r in rows), 4),
+                "cache_hit": round(cached / max(1, tokens_in + cached), 3)}

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**The prompt cache is actually on now.** `context.py` had claimed to be
+cache-friendly since the beginning and no breakpoint had ever been sent, so the
+claim was about prefix stability and nothing else. Two things were missing and
+the second is the one that mattered: a `cache_control` marker, and a prefix
+worth marking. `Session.build_system_parts` now returns [stable, per-turn] —
+persona, provider and the skill catalog before the breakpoint, the clock and the
+gate's retrieval after it. Marking a prefix that changes every minute is worse
+than marking nothing, because a cache write costs more than not caching.
+
+`usage.jsonl` records `cached` and `cache_written` per call, `estimate_cost`
+prices them at Anthropic's 0.1x read / 1.25x write, and `spend()` reports a hit
+rate. Providers that do not report cache tokens read 0 — an unknown rate is not
+a good one.
+
 **Fan-out is now something the model is told to do.** `delegate` and
 `assign_team` were ordinary tools with good descriptions and nothing telling the
 model *when* the shape of a request calls for one — so it almost never reached
@@ -88,7 +102,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 84 deterministic cases.
+**Evals:** 46 → 88 deterministic cases.
 
 ## 0.3.0
 

@@ -164,8 +164,13 @@ class Pocket:
     def _full_turn(self, user_message: str, notify) -> LoopResult:
         """The classic turn. The graph's full_agent node calls this same method,
         so loop-as-a-node can never drift from loop-as-default."""
-        system = self.session.build_system(user_message, notify=notify)
-        system = self.hooks.run("system_built", system) or system
+        # kept split so the cache breakpoint lands after the stable half; a hook
+        # that rewrites the prompt collapses it back to one block, which costs
+        # the breakpoint and is the hook's business
+        system = self.session.build_system_parts(user_message, notify=notify)
+        rewritten = self.hooks.run("system_built", "\n".join(p for p in system if p))
+        if rewritten is not None:
+            system = rewritten
         messages, folded = compact_history(self.session.messages_for(user_message, notify),
                                            self.settings.context_budget_chars, self.summarise)
         if folded:

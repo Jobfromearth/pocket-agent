@@ -68,18 +68,32 @@ class Session:
         self.memory = memory
         self.history: list[dict] = []
 
-    def build_system(self, user_message: str, notify=None) -> str:
+    def build_system_parts(self, user_message: str, notify=None) -> list[str]:
+        """[stable, per-turn]. The split is not cosmetic: a provider's prompt
+        cache matches a PREFIX, so anything that changes every turn has to come
+        after everything that does not. The clock alone would otherwise
+        invalidate the whole system prompt once a minute.
+
+        Stable across a session: who the assistant is, which model it is on, and
+        the skill catalog. Per-turn: the time, and whatever the retrieval gate
+        decided to pull in."""
         now = datetime.now().astimezone()
-        parts = [load_soul(self.settings),
-                 f"\nRight now it is {now:%A, %Y-%m-%d %H:%M} ({now:%Z}).",
-                 (f"You are running on '{self.settings.model}' via the "
-                  f"'{self.settings.provider}' provider.")]
+        stable = [load_soul(self.settings),
+                  (f"You are running on '{self.settings.model}' via the "
+                   f"'{self.settings.provider}' provider.")]
+        if self.memory is not None:
+            stable.append(self.memory.skills.catalog())
+        volatile = [f"Right now it is {now:%A, %Y-%m-%d %H:%M} ({now:%Z})."]
         if self.memory is not None:
             retrieved = self.memory.gated_retrieve(user_message, notify=notify)
             if retrieved:
-                parts.append("\nRelevant memory:\n" + retrieved)
-            parts.append(self.memory.skills.catalog())
-        return "\n".join(part for part in parts if part)
+                volatile.append("\nRelevant memory:\n" + retrieved)
+        return ["\n".join(p for p in stable if p), "\n".join(p for p in volatile if p)]
+
+    def build_system(self, user_message: str, notify=None) -> str:
+        """The same prompt as one string, for every caller that does not care
+        where the cache breakpoint goes."""
+        return "\n".join(p for p in self.build_system_parts(user_message, notify) if p)
 
     def messages_for(self, user_message: str, notify=None) -> list[dict]:
         """A bounded window: only the last N turns enter the prompt, so context,
