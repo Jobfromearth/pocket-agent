@@ -73,6 +73,13 @@ class Settings:
     # folded into one summarised turn
     context_budget_chars: int = field(
         default_factory=lambda: int(os.getenv("POCKET_CONTEXT_BUDGET", "12000")))
+    # fence untrusted tool output and escalate the call after a high-risk one
+    screen_injection: bool = field(
+        default_factory=lambda: os.getenv("POCKET_SCREEN", "1") in ("1", "true", "yes"))
+    # register `search_web` and `fetch_url` — the only tools that leave this
+    # machine. Both are risk="ask"; POCKET_WEB=0 removes them from every prompt.
+    web: bool = field(
+        default_factory=lambda: os.getenv("POCKET_WEB", "1") in ("1", "true", "yes"))
     # register the `delegate` tool (a sub-agent with a scoped tool set)
     subagents: bool = field(
         default_factory=lambda: os.getenv("POCKET_SUBAGENTS", "1") in ("1", "true", "yes"))

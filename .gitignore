@@ -8,3 +8,6 @@ dist/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
+
+# git bundles are snapshots, not source
+*.bundle

@@ -16,9 +16,13 @@ best-effort project — expect a reply in days, not hours.
 | Boundary | Where | What it does |
 |---|---|---|
 | deny list | `permissions.py` | shapes that are refused even if a human approves: recursive deletes of `~`/`/`, fork bombs, pipe-to-shell, credential paths (`.ssh/`, `.aws/credentials`, `.env`), `DROP TABLE` |
-| ask-the-human | `permissions.py` | anything `risk="ask"` — every MCP tool, `delegate`, `assign_team` — prompts once per session, and is *refused* when nothing can ask |
+| ask-the-human | `permissions.py` | anything `risk="ask"` — every MCP tool, `delegate`, `assign_team`, `search_web`, `fetch_url` — prompts once per session, and is *refused* when nothing can ask |
 | scoped registries | `tools.py`, `subagent.py`, `team.py` | a sub-agent or worker gets exactly the tools it was given, and can never delegate or start a team |
 | artifact reads | `context.py` | `read_artifact` resolves names inside `.pocket/artifacts/` only — no traversal |
+| outbound URLs | `web.py` | `http`/`https` only, the host must resolve to a public address, every redirect hop is re-checked, non-text responses are refused, the read is capped at 2 MB — and both web tools are `risk="ask"` |
+| loopback only | `dashboard.py` | the page binds `127.0.0.1` with no flag to change it, and its SQL browser reads a five-table allow-list rather than arbitrary SQL |
+| untrusted output | `injection.py` | anything from web, MCP, a sub-agent or a worker is classified, fenced as data with the finding stated, and a high-risk result escalates the next tool call to ask-the-human, once |
+| chat allow-list | `telegram.py` | the bot answers listed chat ids only; with the list empty it starts, prints who wrote to it, and answers nobody |
 | MCP isolation | `mcp.py` | third-party servers are separate stdio processes; a broken or hostile server is skipped, and its tools arrive namespaced and gated |
 
 ## What is *not* claimed
@@ -26,8 +30,10 @@ best-effort project — expect a reply in days, not hours.
 - **Tools are not sandboxed.** They are Python functions in this process. The
   protection is the deny list plus a human, not a container.
 - **Prompt injection is not solved.** A web page or an MCP server can put text in
-  front of the model. The mitigation here is the permission gate, the narrow core
-  tool set, and a trace you can read afterwards — not detection.
+  front of the model, and `fetch_url` makes that concrete. The mitigation here is
+  the permission gate, the narrow core tool set, the address guard that stops a
+  fetched page from steering the next fetch inwards, and a trace you can read
+  afterwards — not detection.
 - **`POCKET_TRUST` is a loaded gun.** It skips the prompt for the names you list;
   list only tools you have read.
 - **`.pocket/` is not encrypted.** It is a directory of your data — facts,

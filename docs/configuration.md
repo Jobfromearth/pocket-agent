@@ -40,6 +40,7 @@ smart.
 
 | Variable | Default | What it does |
 |---|---|---|
+| `POCKET_WEB` | `1` | register `search_web` and `fetch_url` (both `risk="ask"`) |
 | `POCKET_SUBAGENTS` | `1` | register `delegate` (one sub-task, one sub-agent) |
 | `POCKET_TEAM` | `0` | register `assign_team` (several workers over one board) |
 | `POCKET_GRAPH_WORKFLOWS` | `0` | put the triage graph in front of the loop |
@@ -50,6 +51,64 @@ smart.
 reasons: every registered tool ships in *every* prompt, so a team is opted into;
 and the graph is a front door you should be able to turn off to see the loop
 underneath.
+
+## The web
+
+`search_web` and `fetch_url` (`web.py`) are the only tools that leave this
+machine, so they carry their own rules — and none of these is a knob:
+
+| Rule | What it means |
+|---|---|
+| scheme | `http` and `https` only — never `file://`, `data:` or anything else |
+| address | the host must resolve to a **public** address; loopback, private, link-local and reserved ranges are refused before a socket opens |
+| redirects | every hop is checked again, because a public host may answer `302` with `127.0.0.1` |
+| type | a non-text response is refused, not decoded into the prompt |
+| size | the read is capped at 2 MB while it streams |
+| timeout | 20 seconds for the whole call |
+
+Both are `risk="ask"`, so the first call in a session prompts; `POCKET_WEB=0`
+removes them entirely, and `POCKET_TRUST=search_web` skips the prompt once you
+have read the file. Search scrapes DuckDuckGo's HTML endpoint — no key, no
+account — and a page that comes back is *information*, never instructions: the
+model reads it, and the trace records what was read.
+
+## Doors
+
+| Variable | Default | What it does |
+|---|---|---|
+| `POCKET_DASHBOARD_PORT` | `7777` | where `python -m pocket dashboard` listens, on `127.0.0.1` only |
+| `TELEGRAM_BOT_TOKEN` | — | the bot token from @BotFather |
+| `POCKET_TELEGRAM_ALLOW` | — | comma-separated chat ids the bot will answer; empty answers nobody |
+
+Every gateway meets at `bus.py`: messages carry a `source`, turns are serialised
+by one worker so two doors cannot interleave into one context window, and events
+are published to every subscriber. The dashboard binds loopback and there is no
+flag to change that — it exposes memory, a read-only SQL browser over five
+tables, and a chat box with your tools behind it.
+
+## Tracing and evals
+
+| Variable | Default | What it does |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | mirror the JSONL trace as OpenTelemetry spans (Phoenix, Langfuse, any OTLP receiver) |
+
+The JSONL trace and the spend ledger are always written and need nothing
+installed. Setting the endpoint above additionally exports one `agent_run` span
+per turn with a child span per event, which needs
+`pip install 'pocket-agent[tracing]'`. There is no per-vendor adapter and there
+should not be: every receiver speaks the same protocol. A missing dependency or
+an unreachable collector is recorded and skipped — it never costs a turn.
+
+Evals come in two suites that never share a runner:
+
+```bash
+python -m pocket eval     # deterministic only: offline, free, 100% required
+python -m pocket judge    # scored only: reply quality + gate accuracy (needs a key)
+python -m pocket gate     # both, then write eval_report.json + eval_runs.jsonl
+```
+
+With no key the judged suite is reported as `skipped`, and the gate still passes
+on the deterministic suite alone. `skipped` is never `pass`.
 
 ## MCP servers
 
@@ -63,6 +122,19 @@ underneath.
 Tools arrive as `mcp__<server>__<tool>`, marked `risk="ask"`. A server that
 fails to start is reported once and skipped — never fatal. `python -m pocket mcp`
 writes a starter config and proves one call without a model involved.
+
+## Screening untrusted output
+
+| Variable | Default | What it does |
+|---|---|---|
+| `POCKET_SCREEN` | `1` | classify output from web, MCP, sub-agent and team tools; fence what looks like an injection and escalate the next call |
+
+`injection.py` scores untrusted output against a short list of shapes, wraps
+anything suspicious in a banner naming it as data, and arms one escalation after
+a high-risk finding: the next tool call asks a human even if it normally runs
+unattended. Escalation is one-shot on purpose — a permanent downgrade trains you
+to click through every prompt, and a prompt everybody clicks through is not a
+control.
 
 ## Permissions
 

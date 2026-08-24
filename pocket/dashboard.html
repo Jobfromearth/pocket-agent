@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pocket</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --panel: #ffffff; --line: #e7e3dc; --ink: #23201c;
+    --muted: #7d766c; --accent: #b4552d; --ok: #3f7d4e; --warn: #a8761c;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16150f; --panel: #1e1c17; --line: #322e26; --ink: #eae5db;
+      --muted: #948c7f; --accent: #e08a5c; --ok: #7fb98d; --warn: #d3a05c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  header .meta { color: var(--muted); font: 12px/1.4 var(--mono); }
+  nav { display: flex; gap: 2px; padding: 10px 18px 0; flex-wrap: wrap; }
+  nav button {
+    border: 1px solid transparent; border-bottom: none; background: none; color: var(--muted);
+    padding: 7px 13px; border-radius: 7px 7px 0 0; cursor: pointer; font-size: 13px;
+  }
+  nav button[aria-selected="true"] {
+    background: var(--panel); border-color: var(--line); color: var(--ink);
+  }
+  main { padding: 0 18px 40px; }
+  section[hidden] { display: none; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; margin-top: 14px;
+  }
+  .card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase;
+             letter-spacing: .08em; color: var(--muted); font-weight: 600; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+  .stat { font: 600 24px/1.2 var(--mono); }
+  .stat small { display: block; font: 400 12px/1.4 ui-sans-serif, sans-serif; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font: 12.5px/1.5 var(--mono); }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line);
+           vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .scroll { overflow-x: auto; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+          border: 1px solid var(--line); color: var(--muted); }
+  .pill.ask { color: var(--warn); border-color: var(--warn); }
+  .pill.pass { color: var(--ok); border-color: var(--ok); }
+  .pill.fail { color: var(--accent); border-color: var(--accent); }
+  #tape { font: 12px/1.6 var(--mono); max-height: 62vh; overflow: auto; }
+  #tape div { padding: 2px 0; border-bottom: 1px solid var(--line); }
+  #tape .k { color: var(--accent); display: inline-block; min-width: 110px; }
+  #chat { max-height: 52vh; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+  .msg { max-width: 78%; padding: 9px 13px; border-radius: 12px; border: 1px solid var(--line);
+         white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: var(--bg); }
+  .msg.assistant { align-self: flex-start; }
+  .msg .who { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  form { display: flex; gap: 8px; margin-top: 12px; }
+  input[type=text], select {
+    flex: 1; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink); font-size: 14px;
+  }
+  button.go { padding: 9px 18px; border-radius: 8px; border: 1px solid var(--accent);
+              background: var(--accent); color: #fff; cursor: pointer; }
+  button.go[disabled] { opacity: .5; cursor: default; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>pocket</h1>
+  <span class="meta" id="head-meta">connecting…</span>
+  <span class="meta" id="head-gate"></span>
+</header>
+
+<nav id="tabs"></nav>
+<main>
+  <section id="tab-overview">
+    <div class="card"><h2>this assistant</h2><div class="grid" id="overview-stats"></div></div>
+    <div class="card"><h2>flags</h2><div id="overview-flags" class="muted"></div></div>
+  </section>
+
+  <section id="tab-chat" hidden>
+    <div class="card">
+      <h2>one session, every door</h2>
+      <div id="chat"></div>
+      <form id="chat-form">
+        <input type="text" id="chat-input" placeholder="say something — it lands in the same session as the terminal" autocomplete="off">
+        <button class="go" type="submit">send</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="tab-loop" hidden>
+    <div class="card"><h2>the tape — live</h2><div id="tape"></div></div>
+  </section>
+
+  <section id="tab-memory" hidden>
+    <div class="card"><h2>facts</h2><div class="scroll"><table id="mem-facts"></table></div></div>
+    <div class="card"><h2>episodes</h2><div class="scroll"><table id="mem-episodes"></table></div></div>
+    <div class="card"><h2>skills — metadata always, body only when matched</h2>
+      <div class="scroll"><table id="mem-skills"></table></div></div>
+  </section>
+
+  <section id="tab-tools" hidden>
+    <div class="card"><h2>every tool in every prompt</h2>
+      <div class="scroll"><table id="tools-table"></table></div></div>
+  </section>
+
+  <section id="tab-data" hidden>
+    <div class="card">
+      <h2>state.db</h2>
+      <select id="data-table"></select>
+      <div class="scroll" style="margin-top:12px"><table id="data-rows"></table></div>
+    </div>
+  </section>
+
+  <section id="tab-ops" hidden>
+    <div class="card"><h2>release gate</h2><div id="ops-gate"></div></div>
+    <div class="card"><h2>gate runs</h2><div class="scroll"><table id="ops-runs"></table></div></div>
+    <div class="card"><h2>spend ledger</h2><div class="scroll"><table id="ops-usage"></table></div></div>
+  </section>
+</main>
+
+<script>
+const TABS = [
+  ["overview", "Overview"], ["chat", "Chat"], ["loop", "Loop"],
+  ["memory", "Memory"], ["tools", "Tools"], ["data", "Data"], ["ops", "Ops"],
+];
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? "").replace(/[&<>]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const get = (path) => fetch(path).then((r) => r.json());
+
+let active = "overview";
+const nav = $("tabs");
+for (const [id, label] of TABS) {
+  const button = document.createElement("button");
+  button.textContent = label;
+  button.onclick = () => select(id);
+  button.id = "tabbtn-" + id;
+  nav.appendChild(button);
+}
+
+function select(id) {
+  active = id;
+  for (const [other] of TABS) {
+    $("tab-" + other).hidden = other !== id;
+    $("tabbtn-" + other).setAttribute("aria-selected", String(other === id));
+  }
+  refresh();
+}
+
+function table(node, columns, rows, render) {
+  if (!rows.length) { node.innerHTML = '<tr><td class="muted">nothing yet</td></tr>'; return; }
+  node.innerHTML = "<tr>" + columns.map((c) => `<th>${esc(c)}</th>`).join("") + "</tr>"
+    + rows.map((row) => "<tr>" + render(row).map((cell) => `<td>${cell}</td>`).join("") + "</tr>").join("");
+}
+
+async function refresh() {
+  if (active === "overview") {
+    const data = await get("/api/overview");
+    $("head-meta").textContent = `${data.provider}/${data.model} · ${data.home}`;
+    const gate = data.gate;
+    $("head-gate").innerHTML = gate
+      ? `<span class="pill ${gate.status === "pass" ? "pass" : "fail"}">gate ${esc(gate.status)}</span>`
+      : '<span class="pill">gate not run</span>';
+    const spend = data.spend;
+    $("overview-stats").innerHTML = [
+      [data.counts.facts, "facts remembered"], [data.counts.chat_log, "messages on record"],
+      [data.counts.calendar_events, "calendar rows"], [data.tools, "tools in every prompt"],
+      [spend.calls, "model calls"], ["$" + spend.usd, "estimated spend"],
+    ].map(([n, label]) => `<div class="stat">${esc(n)}<small>${esc(label)}</small></div>`).join("");
+    $("overview-flags").innerHTML = Object.entries(data.flags)
+      .map(([k, v]) => `<span class="pill ${v ? "pass" : ""}">${esc(k)} ${v ? "on" : "off"}</span>`)
+      .join(" ") + (data.mcp_servers.length
+        ? " · mcp: " + data.mcp_servers.map(esc).join(", ") : " · no mcp servers");
+  }
+  if (active === "memory") {
+    const data = await get("/api/memory");
+    table($("mem-facts"), ["subject", "content", "source"], data.facts,
+      (r) => [esc(r.subject), esc(r.content), esc(r.source)]);
+    table($("mem-episodes"), ["summary"], data.episodes, (r) => [esc(r.summary)]);
+    table($("mem-skills"), ["name", "description", "body chars"], data.skills,
+      (r) => [esc(r.name), esc(r.description), esc(r.body.length)]);
+  }
+  if (active === "tools") {
+    const rows = await get("/api/tools");
+    table($("tools-table"), ["name", "origin", "gate", "description"], rows, (r) => [
+      esc(r.name), esc(r.origin),
+      `<span class="pill ${r.risk === "ask" ? "ask" : ""}">${r.risk === "ask" ? "asks first" : "unattended"}</span>`,
+      esc(r.description),
+    ]);
+  }
+  if (active === "data") await loadData();
+  if (active === "ops") {
+    const data = await get("/api/ops");
+    const latest = data.runs[data.runs.length - 1];
+    $("ops-gate").innerHTML = latest
+      ? `<span class="pill ${latest.status === "pass" ? "pass" : "fail"}">${esc(latest.status)}</span>
+         <span class="muted"> deterministic ${esc(latest.deterministic.passed)}/${esc(latest.deterministic.cases)}
+         · judged ${esc(latest.judged.status)} · ${esc(latest.ran_at)}</span>`
+      : '<span class="muted">no gate run yet — try <code>python -m pocket gate</code></span>';
+    table($("ops-runs"), ["when", "status", "deterministic", "judged"], data.runs.slice().reverse(),
+      (r) => [esc(r.ran_at), esc(r.status),
+              esc(r.deterministic.passed + "/" + r.deterministic.cases), esc(r.judged.status)]);
+    table($("ops-usage"), ["model", "in", "out", "usd"], data.usage.slice().reverse(),
+      (r) => [esc(r.model), esc(r.in), esc(r.out), esc(r.usd)]);
+  }
+}
+
+async function loadData() {
+  const chosen = $("data-table").value || "facts";
+  const data = await get("/api/data?table=" + encodeURIComponent(chosen));
+  if (!$("data-table").options.length) {
+    $("data-table").innerHTML = data.tables.map((t) => `<option>${esc(t)}</option>`).join("");
+    $("data-table").value = data.table;
+    $("data-table").onchange = loadData;
+  }
+  const columns = data.rows.length ? Object.keys(data.rows[0]) : ["(empty)"];
+  table($("data-rows"), columns, data.rows,
+    (row) => columns.map((c) => esc(String(row[c] ?? "")).slice(0, 220)));
+}
+
+// ---- the live tape and the chat, both fed by one event stream
+const chat = $("chat");
+function addMessage(message) {
+  const node = document.createElement("div");
+  node.className = "msg " + message.role;
+  node.innerHTML = `<span class="who">${esc(message.role)} · ${esc(message.source)}</span>${esc(message.text)}`;
+  chat.appendChild(node);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+const tape = $("tape");
+const stream = new EventSource("/api/events");
+stream.onmessage = (raw) => {
+  const event = JSON.parse(raw.data);
+  if (event.event === "message") addMessage(event);
+  const line = document.createElement("div");
+  const rest = Object.entries(event)
+    .filter(([k]) => !["event", "at"].includes(k))
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v.slice(0, 120) : JSON.stringify(v)}`)
+    .join("  ");
+  line.innerHTML = `<span class="k">${esc(event.event)}</span>${esc(rest)}`;
+  tape.appendChild(line);
+  while (tape.childElementCount > 400) tape.removeChild(tape.firstChild);
+  tape.scrollTop = tape.scrollHeight;
+  if (event.event === "turn_reply" && active === "overview") refresh();
+};
+
+$("chat-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const input = $("chat-input");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  const button = e.target.querySelector("button");
+  button.disabled = true;
+  try {
+    await fetch("/api/chat", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text}),
+    });
+  } finally {
+    button.disabled = false;
+    input.focus();
+  }
+};
+
+get("/api/transcript").then((rows) => rows.forEach(addMessage));
+select("overview");
+setInterval(() => { if (active !== "loop" && active !== "chat") refresh(); }, 5000);
+</script>
+</body>
+</html>

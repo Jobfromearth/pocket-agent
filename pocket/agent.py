@@ -15,16 +15,20 @@ from pocket.config import Settings, load_settings
 from pocket.context import compact_history, make_read_artifact_tool, offload_if_large
 from pocket.db import connect
 from pocket.graph import build_triage_graph, classify_message, run_graph, todays_events
+from pocket.hooks import Hooks
+from pocket.injection import Screen
 from pocket.loop import LoopResult, run_loop
 from pocket.mcp import connect_servers, load_config
 from pocket.memory import Memory
 from pocket.models import get_client, resolve
 from pocket.permissions import Policy
 from pocket.session import Session
+from pocket.skills import make_read_skill_tool
 from pocket.subagent import make_delegate_tool
 from pocket.team import make_team_tool
 from pocket.tools import build_registry
 from pocket.trace import Tracer
+from pocket.web import make_web_tools
 
 
 def compose(*observers):
@@ -50,17 +54,22 @@ class Pocket:
         self.client = client if client is not None else get_client(self.settings)
         self.memory = Memory(self.conn, self.settings, self.client)
         self.policy = Policy(confirm=confirm)
+        self.hooks = Hooks()
         self.tools = build_registry(
-            self.conn, self.settings.home, policy=self.policy,
+            self.conn, self.settings.home, policy=self.policy, hooks=self.hooks,
             # every tool result passes through offloading on its way to the model
             on_result=lambda name, output: offload_if_large(
                 name, output, self.settings.home, self.settings.tool_result_limit))
         self.tools.register(make_read_artifact_tool(self.settings.home))
+        if self.settings.web:
+            for tool in make_web_tools():
+                self.tools.register(tool)
         if self.settings.subagents:
             self.tools.register(make_delegate_tool(
                 self.client, self.settings.model, self.tools,
                 max_iterations=max(2, self.settings.max_iterations // 2),
                 max_tokens=self.settings.max_tokens))
+        self.tools.register(make_read_skill_tool(self.memory.skills))
         self.session = Session(self.settings, memory=self.memory)
         self.tracer = Tracer(self.settings)
         if self.settings.team:
@@ -70,6 +79,13 @@ class Pocket:
                 self.client, self.settings.model, self.tools, self.conn,
                 max_iterations=max(2, self.settings.max_iterations // 2),
                 max_tokens=self.settings.max_tokens, observer=self.tracer.event))
+        # Untrusted output is fenced on the way in, and the call after a high-risk
+        # result is escalated to ask-the-human. Registered last so it sees every
+        # tool, including the ones MCP is about to add.
+        if self.settings.screen_injection:
+            screen = Screen(self.tools, notify=self.tracer.event)
+            self.hooks.add("after_tool", screen.after_tool)
+            self.hooks.add("before_tool", screen.before_tool)
         # MCP servers are opt-in by the presence of .pocket/mcp.json, and a broken
         # one is reported and skipped — never fatal.
         self.mcp_servers = connect_servers(
@@ -100,7 +116,11 @@ class Pocket:
                 captured["graph_path"] = event.get("path")
 
         notify = compose(observer, self.tracer.event, capture)
+        self.hooks.notify = notify
         started = time.perf_counter()
+        refused = self.hooks.run("turn_start", user_message)
+        if refused is not None:
+            return LoopResult(reply=refused, iterations=0)
 
         with self.tracer.turn(user_message):
             result = None
@@ -131,13 +151,15 @@ class Pocket:
             self.memory.maybe_consolidate(notify=notify)
             self.memory.export_markdown()
             self.tracer.end_turn(result.reply, meta)
+            self.hooks.run("turn_end", user_message, result.reply)
         return result
 
     def _full_turn(self, user_message: str, notify) -> LoopResult:
         """The classic turn. The graph's full_agent node calls this same method,
         so loop-as-a-node can never drift from loop-as-default."""
         system = self.session.build_system(user_message, notify=notify)
-        messages, folded = compact_history(self.session.messages_for(user_message),
+        system = self.hooks.run("system_built", system) or system
+        messages, folded = compact_history(self.session.messages_for(user_message, notify),
                                            self.settings.context_budget_chars, self.summarise)
         if folded:
             notify("compaction", {"messages_folded": folded})

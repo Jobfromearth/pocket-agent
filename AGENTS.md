@@ -13,9 +13,13 @@ capability but costs legibility is usually the wrong trade here.
 ## Commands
 
 ```bash
-python -m pocket eval          # the release gate: deterministic evals, must be 100%
+python -m pocket eval          # deterministic evals, must be 100% - offline and free
+python -m pocket judge         # the scored suite: reply quality, gate accuracy (needs a key)
+python -m pocket gate          # both suites + eval_report.json
 python -m pocket demo          # a scripted tour of every pillar, offline
 python -m pocket team          # the team board, three workers, offline
+python -m pocket dashboard     # the browser door + the terminal, on one bus
+python -m pocket telegram      # the chat door (needs a token and an allow-list)
 python -m pocket mcp           # connect MCP servers and prove one call
 pytest pocket/evals.py         # the same cases under pytest
 ruff check pocket              # lint, same as CI
@@ -26,17 +30,28 @@ Everything above runs offline, with no key and no install. Keep it that way.
 
 ## Rules that are not negotiable
 
-1. **The core imports the standard library only.** `anthropic` and `openai` are
-   optional extras, imported lazily inside the provider that needs them.
+1. **A dependency has to earn its place, and then it is a real dependency.**
+   The core ran on the standard library alone until the eval and observability
+   story outgrew it: DeepEval scores the judged suite and OpenTelemetry carries
+   the trace, because rubric runners and wire protocols are solved problems and
+   the interesting part of this repo is not either of them. The bar for a new
+   one: it replaces something we would otherwise maintain badly, it is imported
+   lazily at the seam that needs it, and `python -m pocket demo` and
+   `python -m pocket eval` still run offline on a fresh clone.
 2. **One mechanism, one file.** New machinery gets a new top-level module with a
    docstring that says what it is *for*, not what it does line by line. Don't
    create `utils.py`, and don't split a mechanism across packages.
 3. **The deterministic suite stays at 100%.** Every behaviour worth defending
    gets a case in `pocket/evals.py` — they are unit tests, never model judgement.
+   Anything a model scores belongs in `pocket/judge.py`, which is a threshold and
+   not a gate, and which fails CLOSED: a grader that cannot grade scores 0.
 4. **Failures degrade, they don't crash.** Tools return errors as text; judges
    (gate, triage, summariser, graph) fail open toward more capability, never less.
 5. **Nothing that reaches outside this process runs unattended.** MCP tools,
-   `delegate`, `assign_team`: `risk="ask"`.
+   `delegate`, `assign_team`, `search_web`, `fetch_url`: `risk="ask"`. Anything
+   new that opens a socket is `ask` too, and its guard belongs in the tool — not
+   in the transport a test can replace. A tool whose output is somebody else's
+   text needs an `origin` outside `core`, or `injection.py` will not screen it.
 6. **Nothing is deleted to save context.** Offload it or summarise it; the row in
    `state.db` stays.
 7. **Docs are part of the change.** If you add a knob, it goes in

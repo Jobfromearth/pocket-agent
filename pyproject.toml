@@ -11,14 +11,20 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Haobo Zu" }]
 keywords = ["agent", "llm", "mcp", "memory", "evals", "multi-agent", "local-first"]
-# The core runs on the standard library alone — that is a design constraint, not
-# an accident: `python -m pocket demo` and the eval suite must work on a fresh
-# clone with no install, no key and no network.
-dependencies = []
+# `python -m pocket demo` and `python -m pocket eval` must still work offline on
+# a fresh clone: everything below is imported lazily, at the seam that needs it.
+dependencies = [
+    # scoring rubrics and a wire protocol are solved problems; see AGENTS.md rule 1
+    "deepeval>=4.1",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
+]
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.40"]
+# the OTLP mirror reaches Langfuse without this; the SDK adds its own UI helpers
+langfuse = ["langfuse>=4"]
 dev = ["pytest>=8", "ruff>=0.16"]
 
 [project.scripts]

@@ -1,5 +1,69 @@
 # Changelog
 
+## Unreleased
+
+**Skills, in two levels.** `skills.py` — the catalog (name + description) always
+ships in the system prompt; a body arrives as its own message, never folded into
+the prompt, either because the matcher was confident or because the model called
+the new `read_skill(name)`. The matcher now tokenises unsegmented scripts, which
+it did not before: it had been silently dropping every skill from every turn in
+one.
+
+**Hooks.** `hooks.py` — five named moments (`turn_start`, `system_built`,
+`before_tool`, `after_tool`, `turn_end`). A hook may veto a tool call or rewrite
+its result; the first opinion wins, and one that raises is dropped rather than
+obeyed.
+
+**Prompt injection screening.** `injection.py`, registered as a hook pair.
+Untrusted output is classified, fenced as data with the finding named in the
+open, and a high-risk result arms exactly one escalation: the next tool call
+asks a human even if it normally runs unattended. `POCKET_SCREEN=0` turns it off.
+
+**Argument self-check.** A missing required argument is now an error the model
+can read and retry from, instead of a `TypeError` out of `fn(**args)`.
+
+**A third door.** `python -m pocket telegram`, under a hundred lines, with
+`POCKET_TELEGRAM_ALLOW` as a mandatory allow-list of chat ids.
+
+**Many doors, one conversation.** `bus.py` — every gateway submits to one
+worker, so a message typed in a browser tab and one typed in the terminal land
+in the same `Session`, in the order the bus took them, and cannot interleave
+into one context window. Events are published to every subscriber, so a turn
+started in one door streams to all of them. A subscriber that raises is dropped
+rather than allowed to take the turn down.
+
+**A browser door.** `python -m pocket dashboard` serves one static page on
+`127.0.0.1:7777` (no build step) with seven panels — Overview, Chat, Loop (the
+live tape over SSE), Memory, Tools, Data, Ops. Every panel is a projection of
+something already on disk, so closing the tab loses nothing. The SQL browser
+reads a five-table allow-list.
+
+**Judged evals.** `judge.py` — the second suite, kept away from the first on
+purpose. Three reply-quality cases scored 0-1 against a written criterion
+(threshold 0.6), and twelve retrieval-gate cases scored by *cost-weighted*
+accuracy: a missed retrieval is priced at 4x a needless one, because it answers
+confidently from nothing. `python -m pocket judge` runs it alone, `python -m
+pocket gate` runs both and writes `eval_report.json` plus an appended
+`eval_runs.jsonl`. With no key the judged suite is `skipped`, never `pass`. One
+inversion from the rest of the repo, stated in the file: a broken judge here
+fails **closed** — in an eval, "I could not tell" is a failure, not a pass.
+
+**OTLP mirror.** With `OTEL_EXPORTER_OTLP_ENDPOINT` set, every trace event is
+also exported as a span (`agent_run` per turn, one child per event) for Phoenix,
+Langfuse or any other receiver. No per-vendor adapter, an optional dependency
+(`pocket-agent[tracing]`), and a broken exporter never costs a turn.
+
+
+**The web.** `web.py` — `search_web` (DuckDuckGo's HTML endpoint, no key) and
+`fetch_url` (one page, stripped to prose). One guarded opener behind both:
+http/https only, the host must resolve to a public address, every redirect hop
+is re-checked, a non-text response is refused, the read is capped at 2 MB. The
+address check lives in the tool rather than in the transport, because the
+transport is the seam the eval suite replaces. Both are `risk="ask"`;
+`POCKET_WEB=0` removes them from every prompt.
+
+**Evals:** 46 → 73 deterministic cases.
+
 ## 0.3.0
 
 **Teams.** `team.py` — several workers over one shared board, inspired by

@@ -21,6 +21,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: deterministic evals + release gate
         run: python -m pocket eval
+      - name: the composed gate writes a verdict (the judged suite skips without a key)
+        run: python -m pocket gate
       - name: the demo runs on a fresh clone, offline
         run: python -m pocket demo
       - name: the team board runs offline

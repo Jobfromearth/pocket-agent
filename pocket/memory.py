@@ -1,6 +1,7 @@
 """Memory — three pillars plus the two agents that manage them.
 
-    procedural   SKILL.md files       how to act        (loaded only when relevant)
+    procedural   SKILL.md files       how to act        (catalogued always, body
+                                                     on demand - see skills.py)
     semantic     facts + FTS5         what is true      (durable, searchable)
     episodic     episodes + FTS5      what happened     (dated)
 
@@ -18,11 +19,11 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
 from pocket.config import Settings
+from pocket.skills import SkillLoader
 
 # ---------------------------------------------------------------- semantic
 # FTS5's default tokenizer keeps every Unicode alphanumeric but does not
@@ -84,59 +85,6 @@ class EpisodeStore:
 
 
 # -------------------------------------------------------------- procedural
-@dataclass
-class Skill:
-    name: str
-    description: str
-    body: str
-
-
-class SkillLoader:
-    """Progressive disclosure, which is the entire point of skills:
-      1. every skill's frontmatter is scanned at startup (cheap, always)
-      2. a skill's BODY enters the prompt only when the message matches it
-    So capability can grow without the default prompt growing with it."""
-
-    def __init__(self, dirs: list[Path]):
-        self.dirs = dirs
-        self.skills: list[Skill] = []
-        self.refresh()
-
-    def refresh(self) -> None:
-        self.skills = []
-        for directory in self.dirs:
-            for path in sorted(directory.rglob("SKILL.md")) if directory.is_dir() else []:
-                skill = self._parse(path.read_text(encoding="utf-8"))
-                if skill:
-                    self.skills.append(skill)
-
-    @staticmethod
-    def _parse(text: str) -> Skill | None:
-        match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.DOTALL)
-        if not match:
-            return None
-        front, body = match.groups()
-        fields = {k.strip(): v.strip().strip("'\"")
-                  for k, _, v in (line.partition(":") for line in front.splitlines() if ":" in line)}
-        if "name" not in fields or "description" not in fields:
-            return None
-        return Skill(fields["name"], fields["description"], body.strip())
-
-    def match(self, message: str, max_skills: int = 2) -> list[Skill]:
-        """A transparent trigger: keyword overlap with name + description. No
-        embeddings — you can compute the score in your head, which is why you
-        can debug why a skill did or did not fire."""
-        words = set(re.findall(r"[a-z0-9]{3,}", message.lower()))
-        scored = []
-        for skill in self.skills:
-            hay = set(re.findall(r"[a-z0-9]{3,}", f"{skill.name} {skill.description}".lower()))
-            overlap = len(words & hay)
-            if overlap >= 2:
-                scored.append((overlap, skill))
-        scored.sort(key=lambda pair: -pair[0])
-        return [skill for _, skill in scored[:max_skills]]
-
-
 # ------------------------------------------------------- the two managers
 GATE_PROMPT = """\
 You are a retrieval gate for a personal assistant's long-term memory.
@@ -210,8 +158,6 @@ class Memory:
         found += self.episodes.search(query, top_k=3)
         return "\n".join(found)
 
-    def matching_skills(self, message: str) -> str:
-        return "\n\n".join(f"### {s.name}\n{s.body}" for s in self.skills.match(message))
 
     # ---- write paths
     def log_chat(self, user_message: str, reply: str, meta: dict | None = None) -> None:

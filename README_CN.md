@@ -10,7 +10,9 @@
 
 ```bash
 python -m pocket demo     # 一趟脚本化的巡演：记忆、门控、分诊、一次真实的工具调用
-python -m pocket eval     # 46 条确定性评测 + 发布门禁，一秒内跑完
+python -m pocket dashboard # 浏览器入口，127.0.0.1:7777，与终端共用同一条消息总线
+python -m pocket eval     # 73 条确定性评测，离线、免费，一秒内跑完
+python -m pocket gate     # 双套件 + CI 读的裁决文件（eval_report.json）
 python -m pocket mcp      # 启一个 MCP server 并真的调一次工具，全程不涉及模型
 python -m pocket team     # 三个 worker 共用一块看板：两个并行，一个等依赖
 python -m pocket tools    # 模型能调什么，以及哪些可以不问人就跑
@@ -20,7 +22,7 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
 对话中输入 `/help` `/tools` `/context` `/memory` `/board` `/new`，由 harness 直接回答，
 永远不会送到模型那里。
 
-核心**只依赖标准库**，`pocket/*.py` 合计 **3,133 行**；`anthropic` / `openai` 只有在你指定
+核心**只依赖标准库**，`pocket/*.py` 合计 **4,988 行**；`anthropic` / `openai` 只有在你指定
 对应 provider 时才会惰性导入。那个行数不是装饰——[评测里有一条断言它仍然属实](pocket/evals.py)，
 `./scripts/line_budget.sh` 会按支柱把它打印出来。
 
@@ -28,21 +30,22 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
 
 | 支柱 | 文件 | 放的是什么 |
 |---|---|---|
-| **Harness** | `config.py` `session.py` `agent.py` `__main__.py` | 工作记忆的组装、接线、终端网关 |
+| **Harness** | `config.py` `session.py` `agent.py` `__main__.py` `hooks.py` | 工作记忆的组装、接线，以及一轮里五个可被 Hook 打断的时刻 |
+| **Doors** | `bus.py` `dashboard.py` `telegram.py` | 终端、浏览器、IM，汇聚到一条串行化的会话 |
 | **Loop** | `loop.py` `models.py` `tools.py` | reason→act→observe 加两条护栏；一个循环，两种线格式 |
-| **Memory** | `memory.py` `db.py` | 语义（FTS5）/ 情景 / 程序性记忆，检索门控，固化 |
+| **Memory** | `memory.py` `db.py` `skills.py` | 语义（FTS5）/ 情景 / 程序性记忆，检索门控，固化，Skill 两级披露 |
 | **Context** | `context.py` | 大结果外置到磁盘；超预算时历史被折叠 |
-| **Reach** | `mcp.py` `subagent.py` | 别人 server 上的 MCP 工具；受限子 Agent |
+| **Reach** | `mcp.py` `web.py` `subagent.py` | 别人 server 上的 MCP 工具；带守卫的联网；受限子 Agent |
 | **Team** | `team.py` | 多个 worker 共用一块看板，按依赖关系调度 |
-| **Safety** | `permissions.py` | 拒绝清单、询问人类、按会话授权——拒绝以文本回给模型 |
+| **Safety** | `permissions.py` `injection.py` | 拒绝清单、询问人类、按会话授权；不可信输出加围栏、下一次调用升级为需人工确认——拒绝以文本回给模型 |
 | **Graph** | `graph.py` | 循环**之外**的结构：并行节点、代码路由、fail-open |
-| **Ops** | `trace.py` `evals.py` | JSONL 轨迹、花费账本、确定性评测、发布门禁 |
+| **Ops** | `trace.py` `evals.py` `judge.py` | JSONL 轨迹（按需镜像到 OTLP）、花费账本、双评测套件、发布门禁 |
 
 状态都在 `.pocket/`：`state.db`（SQLite + FTS5——记忆、日历、聊天记录和团队看板）、
 `calendar.ics`、`MEMORY.md`、`artifacts/`、`traces/<日期>.jsonl`、`usage.jsonl`。
 全部是你能直接打开的文件。
 
-## 九个值得辩护的决定
+## 十个值得辩护的决定
 
 1. **检索门控。** 多数 Agent 每轮都查记忆。那不仅慢，而且更糟：不相关的记忆会带偏答案。这里先让
    便宜模型回答一个很窄的问题——*这条消息需要记忆吗？*——决定和理由都会写进轨迹，于是它是可审计
@@ -64,21 +67,28 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
    一条很短的拒绝清单胜过任何确认。拒绝会像工具错误一样以文本回给模型，于是这一轮换条路继续，而
    不是让进程死掉。`permissions.py`
 
-6. **上下文窗口是预算，要刻意地花。** 40KB 的工具结果会写进 `artifacts/`，只留预览加指针，并给出
+6. **联网只经过一个带守卫的 opener——而守卫不在 opener 里。** `search_web` 和 `fetch_url` 是
+   仅有的两个会离开这台机器的工具，所以规则集中在一个文件里：只允许 http/https、解析出来的地址
+   必须是公网地址、每一跳重定向都重新检查、非文本响应直接拒绝而不是硬解码、读取时就截断而不是读完
+   再截。地址检查放在**工具**里而不是底下的传输层里，因为传输层正是测试会替换掉的那道缝——跟着缝
+   一起消失的守卫等于没有守卫。两个工具都是 `risk="ask"`，而拿回来的东西是信息，永远不是指令。
+   `web.py`
+
+7. **上下文窗口是预算，要刻意地花。** 40KB 的工具结果会写进 `artifacts/`，只留预览加指针，并给出
    `read_artifact` 让模型取它真正需要的那段；对话超预算时，最旧的几轮折成一条摘要，最近几轮保持
    逐字。什么都没被删——`state.db` 里每条消息都还在。`context.py`
 
-7. **委派但不交出控制权。** 子 Agent 就是又一次 `run_loop`，只是任务更窄、工具表更小。它跑在一次
+8. **委派但不交出控制权。** 子 Agent 就是又一次 `run_loop`，只是任务更窄、工具表更小。它跑在一次
    工具调用里，只有*结果*会回到父级，并且不能再委派。爆炸半径正好是你传进去的那张工具表。
    `subagent.py`
 
-8. **团队是一块看板，不是一群蜂。** 当多个子任务彼此独立时，真正的问题不再是「子 Agent 是什么」，
+9. **团队是一块看板，不是一群蜂。** 当多个子任务彼此独立时，真正的问题不再是「子 Agent 是什么」，
    而是协作。所以计划是**数据**——key、工具白名单、`needs`——而不是 Agent 之间的对话。DAG 交给本来
    就有的图引擎执行，独立任务在同一波里并行；每个 worker 只收到它声明依赖的那些结果；某个 worker
    失败时，下游被标成 `blocked`，而不是拿着缺失的输入继续跑。看板是 `state.db` 里的一张表，事后
    可读。`team.py`
 
-9. **确定性评测和判分评测永远不共处一个文件。** 「`create_event` 是不是带着正确参数触发了、那一行
+10. **确定性评测和判分评测永远不共处一个文件。** 「`create_event` 是不是带着正确参数触发了、那一行
    是不是落库了？」是单元测试。「回答好不好？」是打分判断。把两者混在一起是最常见的评测错误；这里
    由确定性套件把住发布门禁。`evals.py`
 
@@ -135,8 +145,12 @@ sqlite3 .pocket/state.db "select key, status from tasks"    # 事后的看板
 - `POCKET_PROVIDER=mock` 是**基于规则的桩，不是模型**。它的存在只是为了让 demo 和评测能离线跑；
   它证明的是 harness 能跑，而不是模型聪明。要真答案，请指向 `anthropic`、`openai`、
   `deepseek` 或 `kimi`。
-- 三个核心工具，一个旗舰任务（日程）。每个注册过的工具都会进入**每一次**提示，所以核心刻意保持很
-  窄——能力通过 MCP 进来，`assign_team` 也默认关闭（`POCKET_TEAM=1` 才注册）。
+- 五个核心工具，一个旗舰任务（日程）。每个注册过的工具都会进入**每一次**提示，所以核心刻意保持很
+  窄——能力通过 MCP 进来，`assign_team` 也默认关闭（`POCKET_TEAM=1` 才注册）。`search_web` 和
+  `fetch_url` 在本会话第一次调用前会问人；`POCKET_WEB=0` 可以把它们从所有提示里移除。
+- `fetch_url` 是个标签剥离器，不是浏览器：不跑 JavaScript、不读 PDF、不登录、不带 cookie。
+  `search_web` 抓的是 DuckDuckGo 的 HTML 端点，那个端点不欠任何人一份 API 契约——标记一变，
+  工具会返回「没有结果」并如实说明，而不是猜。
 - 团队的 worker 是本进程里的线程，共用同一个 home 和同一个数据库。没有 git worktree、没有每个
   worker 的沙箱、没有点对点收件箱、也不能中途重新规划：你得到的隔离就是那张工具表。更重的版本请看
   ClawTeam。

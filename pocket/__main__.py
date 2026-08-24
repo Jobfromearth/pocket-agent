@@ -1,10 +1,14 @@
 """The gateway — text in, text out. It moves strings and prints them; every
-decision belongs to the agent behind it, which is why a second gateway
-(Telegram, voice, a web dock) is a small file and not a rewrite.
+decision belongs to the agent behind it, which is why a second gateway is a
+small file and not a rewrite: they all meet at `bus.py`.
 
     python -m pocket            chat in the terminal
+    python -m pocket dashboard  the browser door, and the terminal one, sharing a bus
+    python -m pocket telegram   the chat door (TELEGRAM_BOT_TOKEN + POCKET_TELEGRAM_ALLOW)
     python -m pocket demo       a scripted tour of the pillars
-    python -m pocket eval       the deterministic suite + release gate
+    python -m pocket eval       the deterministic suite, offline and free
+    python -m pocket judge      the scored suite: reply quality and gate accuracy
+    python -m pocket gate       both suites + the verdict CI reads
     python -m pocket trace      today's trace and the spend ledger
     python -m pocket tools      what the model can call, and what it may do unasked
     python -m pocket mcp        connect the configured MCP servers and prove one call
@@ -16,9 +20,11 @@ Inside a chat, a line starting with `/` never reaches a model — see COMMANDS.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from pocket.agent import Pocket, compose
+from pocket.bus import Bus
 from pocket.config import load_settings
 from pocket.mcp import StdioServer, load_config
 from pocket.permissions import cli_confirm
@@ -109,7 +115,10 @@ def command(pocket: Pocket, message: str) -> str | None:
     return f"  unknown command {verb}. /help lists them."
 
 
-def chat(pocket: Pocket) -> int:
+def chat(pocket: Pocket, bus: Bus | None = None) -> int:
+    """The terminal door. With a bus it is one door among several — a reply
+    typed here and one typed in the browser land in the same session, in the
+    order the bus received them."""
     print(f"pocket · {pocket.settings.provider}/{pocket.settings.model} · "
           f"state in {pocket.settings.home}/  (ctrl-c to quit)")
     if pocket.settings.provider == "mock":
@@ -129,8 +138,11 @@ def chat(pocket: Pocket) -> int:
         if handled is not None:
             print(handled)
             continue
-        result = pocket.respond(message, observer=show)
-        print(f"\npocket > {result.reply}")
+        if bus is None:
+            reply = pocket.respond(message, observer=show).reply
+        else:
+            reply = bus.submit(message, source="cli")
+        print(f"\npocket > {reply}")
 
 
 DEMO = ["Remember that Alex prefers morning meetings",   # memory write
@@ -161,6 +173,38 @@ def tools(pocket: Pocket) -> int:
         gate = "asks first" if tool.risk == "ask" else "runs unattended"
         print(f"  {name:<28} {tool.origin:<12} {gate}")
     return 0
+
+
+def dashboard(pocket: Pocket) -> int:
+    """Two doors on one bus: a page on 127.0.0.1 and this terminal. Whatever you
+    type in either shows up in both, because neither of them owns the session."""
+    from pocket.dashboard import serve
+
+    bus = Bus(pocket).start()
+    port = int(os.getenv("POCKET_DASHBOARD_PORT", "7777"))
+    server = serve(pocket, bus, port=port)
+    # the CLI door prints the same events the page renders, so a turn started in
+    # the browser is still legible to someone watching the terminal
+    bus.subscribe(lambda kind, event: show(kind, event) if kind != "message" else None)
+    print(f"dashboard · http://127.0.0.1:{port}  (loopback only, ctrl-c to quit)")
+    try:
+        return chat(pocket, bus=bus)
+    finally:
+        server.shutdown()
+        bus.stop()
+
+
+def telegram(pocket: Pocket) -> int:
+    """The third door. It shares everything with the other two except the wire."""
+    from pocket.telegram import run
+
+    bus = Bus(pocket).start()
+    try:
+        return run(bus) or 0
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        bus.stop()
 
 
 DEMO_MCP_CONFIG = {"servers": {"demo": {
@@ -231,10 +275,14 @@ def trace(pocket: Pocket) -> int:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     verb = argv[0] if argv else "chat"
-    if verb == "eval":                          # no agent needed: it builds its own
+    if verb in ("eval", "gate"):                 # no agent needed: they build their own
         from pocket.evals import main as run_evals
 
-        return run_evals()
+        return run_evals(["--gate"] if verb == "gate" else argv[1:])
+    if verb == "judge":
+        from pocket.judge import main as run_judge
+
+        return run_judge()
     settings = load_settings()
     if verb == "demo":
         settings.graph_workflows = True         # show the graph front door too
@@ -243,7 +291,8 @@ def main(argv: list[str] | None = None) -> int:
     pocket = Pocket(settings, confirm=cli_confirm)
     try:
         return {"chat": chat, "demo": demo, "trace": trace, "team": team,
-                "tools": tools, "mcp": mcp}.get(verb, chat)(pocket)
+                "tools": tools, "mcp": mcp,
+                "dashboard": dashboard, "telegram": telegram}.get(verb, chat)(pocket)
     finally:
         pocket.close()
 

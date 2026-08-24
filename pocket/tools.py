@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from pocket.hooks import Hooks
 from pocket.permissions import Policy
 
 
@@ -39,9 +40,12 @@ class Tool:
 
 
 class ToolRegistry:
-    def __init__(self, policy: Policy | None = None, on_result=None) -> None:
+    def __init__(self, policy: Policy | None = None, on_result=None,
+                 hooks: Hooks | None = None) -> None:
         self._tools: dict[str, Tool] = {}
         self.policy = policy or Policy()
+        # hooks may veto a call or rewrite its result; observers only watch
+        self.hooks = hooks or Hooks()
         # hook the loop's observation path: context offloading plugs in here, so
         # neither the loop nor any tool has to know that large results are moved
         self.on_result = on_result or (lambda name, output: output)
@@ -60,7 +64,7 @@ class ToolRegistry:
 
     def subset(self, names: list[str]) -> ToolRegistry:
         """A scoped registry for a sub-agent: same policy, fewer tools."""
-        scoped = ToolRegistry(policy=self.policy, on_result=self.on_result)
+        scoped = ToolRegistry(policy=self.policy, on_result=self.on_result, hooks=self.hooks)
         for name in names:
             tool = self._tools.get(name)
             if tool is not None:
@@ -71,14 +75,30 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             return f"Error: unknown tool '{name}'"
+        missing = missing_arguments(tool, args)
+        if missing:
+            # the model can fix this and retry; a TypeError from **args cannot be
+            return f"Error calling {name}: missing required argument(s) {', '.join(missing)}"
         decision = self.policy.check(name, args, tool.risk)
         if not decision.allowed:
             # refused, not raised: the model reads this and can choose another way
             return f"Blocked by policy: {decision.reason}."
+        vetoed = self.hooks.run("before_tool", name, args)
+        if vetoed is not None:
+            return vetoed
         try:
-            return self.on_result(name, tool.fn(**args))
+            output = self.on_result(name, tool.fn(**args))
         except Exception as exc:            # surface, never crash the loop
             return f"Error running {name}: {exc}"
+        return self.hooks.run("after_tool", name, args, output) or output
+
+
+def missing_arguments(tool: Tool, args: dict[str, Any]) -> list[str]:
+    """The registry checks the schema it already published rather than letting
+    `fn(**args)` raise: a model that forgot an argument should be told which one,
+    in the same shape every other tool error arrives in."""
+    required = tool.input_schema.get("required", []) if tool.input_schema else []
+    return [key for key in required if key not in args]
 
 
 def _write_ics(home: Path, title: str, start: str, end: str) -> None:
@@ -96,7 +116,7 @@ def _write_ics(home: Path, title: str, start: str, end: str) -> None:
 
 
 def build_registry(conn: sqlite3.Connection, home: Path, policy: Policy | None = None,
-                   on_result=None) -> ToolRegistry:
+                   on_result=None, hooks: Hooks | None = None) -> ToolRegistry:
     def create_event(title: str, start: str, end: str = "", attendees: str = "") -> str:
         start_dt = datetime.fromisoformat(start)
         end = end or (start_dt + timedelta(hours=1)).isoformat(timespec="minutes")
@@ -122,7 +142,7 @@ def build_registry(conn: sqlite3.Connection, home: Path, policy: Policy | None =
         conn.commit()
         return f"Saved to memory under '{subject}': {content}"
 
-    registry = ToolRegistry(policy=policy, on_result=on_result)
+    registry = ToolRegistry(policy=policy, on_result=on_result, hooks=hooks)
     registry.register(Tool(
         name="create_event",
         description=("Create a calendar event. Resolve relative dates yourself — the current "

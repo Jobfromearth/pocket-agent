@@ -12,7 +12,9 @@ after cloning:
 
 ```bash
 python -m pocket demo     # a scripted tour: memory, the gate, triage, a real tool call
-python -m pocket eval     # 46 deterministic checks + the release gate, in under a second
+python -m pocket dashboard # a browser door on 127.0.0.1:7777, sharing one bus with the terminal
+python -m pocket eval     # 73 deterministic checks, offline and free, in under a second
+python -m pocket gate     # both suites + the verdict CI reads (eval_report.json)
 python -m pocket mcp      # start an MCP server and call a tool through it, no model involved
 python -m pocket team     # three workers over one board: two in parallel, one that waits
 python -m pocket tools    # what the model can call — and what it may do without asking
@@ -22,7 +24,7 @@ python -m pocket          # chat for real (put a key in .env)
 Inside a chat, `/help` `/tools` `/context` `/memory` `/board` `/new` are answered by the
 harness itself and never reach a model.
 
-The core imports **stdlib only** and `pocket/*.py` totals **3,195 lines**; `anthropic` /
+The core imports **stdlib only** and `pocket/*.py` totals **4,988 lines**; `anthropic` /
 `openai` load lazily, and only if you point it at that provider. That line count is not
 decoration — [an eval asserts it is still true](pocket/evals.py), and
 `./scripts/line_budget.sh` prints it per pillar.
@@ -31,21 +33,22 @@ decoration — [an eval asserts it is still true](pocket/evals.py), and
 
 | Pillar | Files | What lives there |
 |---|---|---|
-| **Harness** | `config.py` `session.py` `agent.py` `__main__.py` | working-memory assembly, wiring, the terminal gateway |
+| **Harness** | `config.py` `session.py` `agent.py` `__main__.py` `hooks.py` | working-memory assembly, wiring, and five moments a hook may interrupt |
+| **Doors** | `bus.py` `dashboard.py` `telegram.py` | terminal, browser and chat, converging on one serialised session |
 | **Loop** | `loop.py` `models.py` `tools.py` | reason→act→observe with two guardrails; 2 wire formats behind one loop |
-| **Memory** | `memory.py` `db.py` | semantic (FTS5) / episodic / procedural, a retrieval gate, consolidation |
+| **Memory** | `memory.py` `db.py` `skills.py` | semantic (FTS5) / episodic / procedural, a retrieval gate, consolidation, two-level skill disclosure |
 | **Context** | `context.py` | large results offloaded to disk; history compacted when it outgrows its budget |
-| **Reach** | `mcp.py` `subagent.py` | MCP tools from other people's servers; delegation to a scoped sub-agent |
+| **Reach** | `mcp.py` `web.py` `subagent.py` | MCP tools from other people's servers; the open web behind one guarded opener; delegation to a scoped sub-agent |
 | **Team** | `team.py` | several workers over one shared board, scheduled by their dependencies |
-| **Safety** | `permissions.py` | deny list, ask-the-human, per-session grants — refusals come back as text |
+| **Safety** | `permissions.py` `injection.py` | deny list, ask-the-human, per-session grants; untrusted output fenced and the next call escalated — refusals come back as text |
 | **Graph** | `graph.py` | structure *around* the loop: parallel nodes, code routers, fail-open |
-| **Ops** | `trace.py` `evals.py` | JSONL trace, spend ledger, deterministic evals, release gate |
+| **Ops** | `trace.py` `evals.py` `judge.py` | JSONL trace (mirrored to OTLP on request), spend ledger, two eval suites, the release gate |
 
 State lives in `.pocket/`: `state.db` (SQLite + FTS5 — memory, calendar, chat log and the
 team board), `calendar.ics`, `MEMORY.md`, `artifacts/`, `traces/<date>.jsonl`,
 `usage.jsonl`. All of it yours to open.
 
-## Nine decisions worth defending
+## Ten decisions worth defending
 
 1. **The retrieval gate.** Most agents query memory every turn. That is slow, and worse:
    irrelevant memories bias the answer. A cheap model answers one narrow question first —
@@ -72,18 +75,27 @@ team board), `calendar.ics`, `MEMORY.md`, `artifacts/`, `traces/<date>.jsonl`,
    over any confirmation. A refusal is returned to the model as text, like a tool error, so
    the turn continues down another path instead of the process dying. `permissions.py`
 
-6. **The context window is a budget, spent deliberately.** A 40KB tool result is written to
+6. **The web is reached through one guarded opener — and the guard is not in the
+   opener.** `search_web` and `fetch_url` are the only tools that leave this machine, so the
+   rules live in one file: http/https only, the resolved address must be public, every
+   redirect hop is checked again, a non-text response is refused rather than decoded, and the
+   read is capped while it streams. The address check sits in the *tool*, not in the transport
+   beneath it, because the transport is the seam tests replace — a guard that disappears with
+   the seam guards nothing. Both are `risk="ask"`, and what comes back is information, never
+   instructions. `web.py`
+
+7. **The context window is a budget, spent deliberately.** A 40KB tool result is written to
    `artifacts/` and replaced by a preview plus a pointer, with a `read_artifact` tool for the
    part that matters; when the conversation outgrows its budget the oldest turns fold into one
    summary and recent turns stay verbatim. Nothing is deleted — `state.db` still has every
    message. `context.py`
 
-7. **Delegation without handing over control.** A sub-agent is one more `run_loop` with a
+8. **Delegation without handing over control.** A sub-agent is one more `run_loop` with a
    narrower brief and a smaller registry. It runs inside a single tool call, only its *result*
    crosses back, and it cannot delegate again. The blast radius is exactly the tool list you
    passed. `subagent.py`
 
-8. **A team is a board, not a swarm.** When several sub-tasks are independent, the
+9. **A team is a board, not a swarm.** When several sub-tasks are independent, the
    interesting question stops being "what is a sub-agent" and becomes coordination. So a
    plan is *data* — keys, tool allow-lists, `needs` — never a conversation between agents.
    The DAG is executed by the graph engine that was already here, so independent tasks run
@@ -91,10 +103,64 @@ team board), `calendar.ics`, `MEMORY.md`, `artifacts/`, `traces/<date>.jsonl`,
    failed worker leaves its dependents `blocked` rather than running them on missing input.
    The board is a table in `state.db`, so a run is readable after the fact. `team.py`
 
-9. **Deterministic evals and judged evals never share a file.** "Did `create_event` fire with
-   the right arguments and did the row land?" is a unit test. "Was the reply good?" is a scored
-   judgement. Collapsing the two is the most common eval mistake; here the deterministic suite
-   gates the release. `evals.py`
+10. **Deterministic evals and judged evals never share a file, a runner, or a meaning.**
+   "Did `create_event` fire with the right arguments and did the row land?" is a unit test —
+   0 or 1, and one failure blocks the release. "Was the reply good?" is a score against a
+   threshold. For the retrieval gate the metric is not accuracy but a *cost-weighted*
+   accuracy: a missed retrieval answers confidently from nothing, so it is priced at 4x a
+   needless one. Judged evals with no key are `skipped`, never passed — a suite that could
+   not run must not look like one that did. And one inversion is deliberate: everywhere else
+   a broken judge fails open, but a grader that cannot grade scores zero. `evals.py`,
+   `judge.py`
+
+## Many doors, one conversation
+
+`python -m pocket telegram` is the third one, in under a hundred lines, because
+a gateway is `bus.submit()` plus, if it renders progress, `bus.subscribe()`.
+`POCKET_TELEGRAM_ALLOW` is an allow-list of chat ids and is not optional: a bot
+token addresses a bot anyone can find, and behind this one sits your calendar.
+
+A gateway's job is to move strings. The moment there is a second one, three
+questions appear that a gateway must not answer for itself — who is talking, what
+happens when two arrive at once, and who else is watching. `bus.py` answers all
+three: every message carries its `source` and lands in the same `Session`; turns
+are serialised by one worker so two doors cannot interleave into one context
+window; and events are published to every subscriber, so a turn started in the
+browser still streams its gate decision and tool calls to the terminal.
+
+```bash
+python -m pocket dashboard      # the page, and this terminal, on one bus
+```
+
+The page is one static file with no build step — seven panels, each a projection
+of something already on disk: `state.db`, `traces/<date>.jsonl`, `usage.jsonl`,
+`eval_report.json`. It binds `127.0.0.1` and there is no flag to change that.
+
+## Skills, in two levels
+
+A skill is a `SKILL.md`. Level one is its **name and description**, rendered as a
+catalog that always ships in the system prompt — a line each, and the reason the
+second level can exist at all: a model cannot ask for a body it does not know
+about. Level two is the **body**, and it arrives as *its own message*, never
+folded into the system prompt, so a job's instructions stay attributable in the
+trace and droppable by compaction.
+
+Two things pull a body in, and they are not rivals. A keyword matcher fires when
+it is confident, costing no extra round trip; `read_skill(name)` is what the
+model calls when the matcher was wrong — which is also the only path that works
+for a language the matcher tokenises badly.
+
+## Prompt injection, contained rather than solved
+
+A page `fetch_url` brings back can be written to be read as instructions. There
+is no detector that catches all of it, so `injection.py` does not claim one. It
+**classifies** untrusted output against shapes with no innocent reason to appear
+in a search result, **fences** anything suspicious — kept, not dropped, wrapped
+in a banner naming it as data with the finding stated in the open — and
+**escalates**: after a high-risk result the next tool call needs a human, once,
+even if that tool normally runs unattended. A rewording defeats the patterns.
+What it does not defeat is the escalation, because that gates the only thing an
+injection can actually want: the next side effect.
 
 ## The graph, briefly
 
@@ -153,12 +219,19 @@ that starter config, connects, and makes one real call so you can see the protoc
 - `POCKET_PROVIDER=mock` is a **rule-based stub, not a model**. It exists so the demo and the
   eval suite run offline; it proves the harness works, never that a model is smart. Point it
   at `anthropic`, `openai`, `deepseek` or `kimi` for real answers.
-- Three core tools, one flagship task (scheduling). Every registered tool ships in every
+- Five core tools, one flagship task (scheduling). Every registered tool ships in every
   prompt, so the core stays narrow on purpose — capability arrives through MCP instead, and
-  `assign_team` is off (`POCKET_TEAM=1`) until you want it.
+  `assign_team` is off (`POCKET_TEAM=1`) until you want it. `search_web` and `fetch_url` ask
+  before the session's first call; `POCKET_WEB=0` removes them from every prompt.
+- `fetch_url` is a tag stripper, not a browser: no JavaScript, no PDFs, no login, no cookies.
+  `search_web` scrapes DuckDuckGo's HTML endpoint, which owes nobody an API contract — when
+  the markup changes, the tool returns no results and says so rather than guessing.
 - A team's workers are threads in this process, sharing one home and one database. There are
   no git worktrees, no per-worker sandbox, no inbox between peers and no re-planning
   mid-run: the isolation you get is the tool list. ClawTeam does the heavier version.
+- The judged suite grades three reply-quality cases and twelve gate cases. That is a smoke
+  test for behaviour drift, not a benchmark — and it spends real tokens, which is why
+  `python -m pocket eval` never runs it and `python -m pocket gate` does.
 - Only loop calls are priced in `usage.jsonl`; the gate, triage and summariser calls are
   traced but not priced. Dollars are estimates from a small table; tokens are the truth.
 - Keyword search (FTS5), not embeddings. For one person's facts, ranked keyword search is
@@ -174,7 +247,8 @@ that starter config, connects, and makes one real call so you can see the protoc
 
 关键机制：检索门控、三层记忆 + 定期固化、上下文治理（大结果外置 + 超预算折叠）、**MCP 客户端**
 （2026-07-28 无状态修订，自动回退旧版握手）、权限门、受控子 Agent、**团队看板**（计划是数据不是对
-话，依赖决定调度，失败即阻塞下游）、Graph 编排，以及 46 条确定性评测构成的发布门禁。
+话，依赖决定调度，失败即阻塞下游）、Graph 编排、**联网**（`search_web` / `fetch_url`，出站地址
+守卫 + 每跳重查 + 询问人类），以及 54 条确定性评测构成的发布门禁。
 
 完整中文文档：**[README_CN.md](README_CN.md)**。
 

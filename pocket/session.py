@@ -2,8 +2,9 @@
 
     system prompt (SOUL.md)     who the assistant is
   + retrieved memory (gated)    what it remembers, only when the turn needs it
-  + matching skills             how to do this particular job
+  + the skill catalog           what jobs it knows a procedure for (names only)
   + a windowed chat history     what we just said
+  + any matched skill BODY      as its own message, not folded into the prompt
   + the new message
 
 Everything here is ephemeral. What persists lives in memory.py.
@@ -14,6 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pocket.config import Settings
+from pocket.skills import as_message
 
 DEFAULT_SOUL = """\
 You are pocket, a personal assistant running locally on your user's laptop.
@@ -61,18 +63,28 @@ class Session:
             retrieved = self.memory.gated_retrieve(user_message, notify=notify)
             if retrieved:
                 parts.append("\nRelevant memory:\n" + retrieved)
-            skills = self.memory.matching_skills(user_message)
-            if skills:
-                parts.append("\nRelevant skill instructions:\n" + skills)
-        return "\n".join(parts)
+            parts.append(self.memory.skills.catalog())
+        return "\n".join(part for part in parts if part)
 
-    def messages_for(self, user_message: str) -> list[dict]:
+    def messages_for(self, user_message: str, notify=None) -> list[dict]:
         """A bounded window: only the last N turns enter the prompt, so context,
         cost and latency stay flat however long the conversation runs. Older
         turns are not lost — they are in state.db, distilled by consolidation and
-        pulled back by the retrieval gate when they matter."""
+        pulled back by the retrieval gate when they matter.
+
+        A skill the matcher is confident about rides in here as its OWN message,
+        which is what keeps a job's instructions attributable in the trace and
+        droppable by compaction. When the matcher is wrong the model still has
+        `read_skill`, and the catalog in the system prompt tells it what to ask
+        for."""
         window = self.settings.history_turns * 2
-        return self.history[-window:] + [{"role": "user", "content": user_message}]
+        messages = list(self.history[-window:])
+        for skill in (self.memory.skills.match(user_message) if self.memory else []):
+            if notify:
+                notify("skill", {"name": skill.name, "how": "matched", "chars": len(skill.body)})
+            messages.append(as_message(skill))
+        messages.append({"role": "user", "content": user_message})
+        return messages
 
     def add_exchange(self, user_message: str, reply: str, tool_calls=None,
                      meta: dict | None = None) -> None:

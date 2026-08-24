@@ -248,6 +248,9 @@ class ScriptedClient:
 
             day = (date.today() + timedelta(days=1)).isoformat() if "tomorrow" in low else "today"
             return self._call("list_events", {"day": day})
+        if "search_web" in names and re.search(r"^(search|look up|google)\b", low):
+            query = re.sub(r"^(search for|search|look up|google)\s+", "", low).strip()
+            return self._call("search_web", {"query": query})
         return _reply([_block(type="text", text="(scripted model) no tool matched this message.")],
                       False)
 
