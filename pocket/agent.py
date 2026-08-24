@@ -25,7 +25,7 @@ from pocket.hooks import Hooks
 from pocket.injection import Screen
 from pocket.loop import LoopResult, run_loop
 from pocket.mcp import connect_servers, load_config
-from pocket.memory import Memory
+from pocket.memory import Memory, make_memory_tools
 from pocket.models import get_client, resolve
 from pocket.permissions import Policy
 from pocket.session import Session
@@ -77,6 +77,10 @@ class Pocket:
                 max_iterations=max(2, self.settings.max_iterations // 2),
                 max_tokens=self.settings.max_tokens))
         self.tools.register(make_read_skill_tool(self.memory.skills))
+        if self.settings.self_edit:
+            for tool in make_memory_tools(self.conn, self.settings,
+                                          self.memory.skills):
+                self.tools.register(tool)
         self.session = Session(self.settings, memory=self.memory)
         self.tracer = Tracer(self.settings)
         if self.settings.team:

@@ -75,14 +75,16 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             return f"Error: unknown tool '{name}'"
-        missing = missing_arguments(tool, args)
-        if missing:
-            # the model can fix this and retry; a TypeError from **args cannot be
-            return f"Error calling {name}: missing required argument(s) {', '.join(missing)}"
+        # permission first: the deny list has to win over everything, including a
+        # call that would have been rejected for a duller reason anyway
         decision = self.policy.check(name, args, tool.risk)
         if not decision.allowed:
             # refused, not raised: the model reads this and can choose another way
             return f"Blocked by policy: {decision.reason}."
+        missing = missing_arguments(tool, args)
+        if missing:
+            # the model can fix this and retry; a TypeError from **args cannot be
+            return f"Error calling {name}: missing required argument(s) {', '.join(missing)}"
         vetoed = self.hooks.run("before_tool", name, args)
         if vetoed is not None:
             return vetoed

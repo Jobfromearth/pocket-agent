@@ -23,6 +23,7 @@ best-effort project — expect a reply in days, not hours.
 | loopback only | `dashboard.py` | the page binds `127.0.0.1` with no flag to change it, and its SQL browser reads a five-table allow-list rather than arbitrary SQL |
 | untrusted output | `injection.py` | anything from web, MCP, a sub-agent or a worker is classified, fenced as data with the finding stated, and a high-risk result escalates the next tool call to ask-the-human, once |
 | chat allow-list | `telegram.py` | the bot answers listed chat ids only; with the list empty it starts, prints who wrote to it, and answers nobody |
+| self-edit asks | `memory.py` | `manage_memory`, `update_soul` and `create_skill` change what this assistant will be next session, so all three are `risk="ask"` — including `manage_memory`'s harmless `search`, because a tool whose risk depends on an argument is a tool whose risk you cannot read off the registry |
 | MCP isolation | `mcp.py` | third-party servers are separate stdio processes; a broken or hostile server is skipped, and its tools arrive namespaced and gated |
 
 ## What is *not* claimed

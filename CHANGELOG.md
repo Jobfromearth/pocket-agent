@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+**The assistant can edit its own memory.** `manage_memory` (search, correct,
+forget), `update_soul` (a standing rule, appended under a "Learned rules"
+heading in the STABLE half of the prompt so it does not cost the cache every
+turn) and `create_skill` (a SKILL.md, with the catalog reloaded on the spot).
+All three are `risk="ask"`: they change what this assistant will be next
+session, which is a different kind of power from booking a meeting. Even
+`manage_memory`'s harmless `search` asks, because a tool whose risk depends on
+one of its arguments is a tool whose risk you cannot read off the registry.
+
+`forget` retracts rather than deletes: the fact leaves search and MEMORY.md,
+the row stays in `state.db` marked `forgotten`. "Nothing is deleted" had to
+survive a tool whose whole job is forgetting. `correct` maintains the FTS5
+shadow by hand, because a content-backed index that is not told about an UPDATE
+keeps answering with text the table no longer holds.
+
+`db.py` gains the smallest migration that can add a column to a database an
+older version made, and the rule that keeps it small: add, never rename, never
+drop.
+
+**Fixed:** the argument self-check ran before the permission gate, so a call
+that was going to be refused could come back as a schema error instead. The
+deny list has to win over everything.
+
 **The prompt cache is actually on now.** `context.py` had claimed to be
 cache-friendly since the beginning and no breakpoint had ever been sent, so the
 claim was about prefix stability and nothing else. Two things were missing and
@@ -102,7 +125,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 88 deterministic cases.
+**Evals:** 46 → 95 deterministic cases.
 
 ## 0.3.0
 

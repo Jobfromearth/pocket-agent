@@ -47,6 +47,7 @@ smart.
 
 | Variable | Default | What it does |
 |---|---|---|
+| `POCKET_SELF_EDIT` | `1` | register `manage_memory`, `update_soul`, `create_skill` (all `risk="ask"`) |
 | `POCKET_WEB` | `1` | register `search_web` and `fetch_url` (both `risk="ask"`) |
 | `POCKET_SUBAGENTS` | `1` | register `delegate` (one sub-task, one sub-agent) |
 | `POCKET_TEAM` | `0` | register `assign_team` (several workers over one board) |

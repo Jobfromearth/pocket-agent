@@ -76,6 +76,10 @@ class Settings:
     # fence untrusted tool output and escalate the call after a high-risk one
     screen_injection: bool = field(
         default_factory=lambda: os.getenv("POCKET_SCREEN", "1") in ("1", "true", "yes"))
+    # register manage_memory / update_soul / create_skill: the tools that
+    # change what this assistant will be next session. All three are ask.
+    self_edit: bool = field(
+        default_factory=lambda: os.getenv("POCKET_SELF_EDIT", "1") in ("1", "true", "yes"))
     # register `search_web` and `fetch_url` — the only tools that leave this
     # machine. Both are risk="ask"; POCKET_WEB=0 removes them from every prompt.
     web: bool = field(

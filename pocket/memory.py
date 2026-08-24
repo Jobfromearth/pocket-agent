@@ -24,6 +24,7 @@ from pathlib import Path
 
 from pocket.config import Settings
 from pocket.skills import SkillLoader
+from pocket.tools import Tool
 
 # ---------------------------------------------------------------- semantic
 # FTS5's default tokenizer keeps every Unicode alphanumeric but does not
@@ -59,7 +60,8 @@ class FactStore:
             return []
         rows = self.conn.execute(
             "SELECT f.subject, f.content FROM facts_fts JOIN facts f ON f.id = facts_fts.rowid "
-            "WHERE facts_fts MATCH ? ORDER BY rank LIMIT ?", (match, top_k)).fetchall()
+            "WHERE facts_fts MATCH ? AND f.forgotten = 0 ORDER BY rank LIMIT ?",
+            (match, top_k)).fetchall()
         return [f"[{r['subject']}] {r['content']}" for r in rows]
 
 
@@ -200,7 +202,8 @@ class Memory:
     def export_markdown(self) -> None:
         """state.db stays the queryable source of truth; MEMORY.md is a generated
         mirror, so 'your memory is a file you can open' is literally true."""
-        facts = self.conn.execute("SELECT subject, content FROM facts ORDER BY subject, id").fetchall()
+        facts = self.conn.execute("SELECT subject, content FROM facts WHERE forgotten = 0 "
+                                  "ORDER BY subject, id").fetchall()
         eps = self.conn.execute(
             "SELECT happened_at, summary FROM episodes ORDER BY happened_at DESC, id DESC").fetchall()
         lines = ["# pocket memory", "",
@@ -210,3 +213,115 @@ class Memory:
         lines += ["", f"## Episodes ({len(eps)})", ""]
         lines += [f"- **{e['happened_at']}** - {e['summary']}" for e in eps] or ["_none yet_"]
         (self.settings.home / "MEMORY.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ------------------------------------------------- the assistant editing itself
+# Three tools that change what this assistant will be NEXT session, not just what
+# it answers now. That is a different kind of power from `create_event`, and it
+# gets a different default: all three are risk="ask".
+#
+# A tool whose risk depends on one of its arguments is a tool whose risk you
+# cannot read off the registry, so `manage_memory` asks for `search` too even
+# though searching changes nothing. One readable rule beats three correct ones.
+SOUL_MARK = "## Learned rules"
+
+
+def make_memory_tools(conn: sqlite3.Connection, settings, skills) -> list[Tool]:
+    def manage_memory(action: str, query: str = "", id: int = 0,
+                      subject: str = "", content: str = "") -> str:
+        action = action.strip().lower()
+        if action == "search":
+            rows = conn.execute(
+                "SELECT id, subject, content FROM facts WHERE forgotten = 0 "
+                "AND (subject LIKE ? OR content LIKE ?) ORDER BY id DESC LIMIT 20",
+                (f"%{query}%", f"%{query}%")).fetchall()
+            if not rows:
+                return f"No remembered fact matches '{query}'."
+            return "\n".join(f"[{r['id']}] {r['subject']}: {r['content']}" for r in rows)
+        if action == "correct":
+            if not id or not content:
+                return "Error: correct needs both `id` and the new `content`."
+            # the FTS shadow is content= backed by facts, so it has to be told
+            conn.execute("INSERT INTO facts_fts(facts_fts, rowid, subject, content) "
+                         "SELECT 'delete', id, subject, content FROM facts WHERE id = ?", (id,))
+            conn.execute("UPDATE facts SET content = ?, subject = COALESCE(NULLIF(?, ''), subject) "
+                         "WHERE id = ?", (content, subject.lower().strip(), id))
+            row = conn.execute("SELECT subject, content FROM facts WHERE id = ?", (id,)).fetchone()
+            if row is None:
+                return f"Error: no fact with id {id}."
+            conn.execute("INSERT INTO facts_fts(rowid, subject, content) VALUES (?,?,?)",
+                         (id, row["subject"], row["content"]))
+            conn.commit()
+            return f"Corrected [{id}] {row['subject']}: {row['content']}"
+        if action == "forget":
+            if not id:
+                return "Error: forget needs the `id` of the fact, from a search."
+            changed = conn.execute("UPDATE facts SET forgotten = 1 WHERE id = ?", (id,)).rowcount
+            conn.commit()
+            if not changed:
+                return f"Error: no fact with id {id}."
+            # retracted, not deleted: it leaves search and MEMORY.md, and the row
+            # stays in state.db, because nothing in this repo destroys a record
+            return (f"Forgot fact {id} — it will not be retrieved or mirrored again. "
+                    f"The row is still in state.db, marked forgotten.")
+        return f"Error: unknown action '{action}'. Use search, correct or forget."
+
+    def update_soul(rule: str) -> str:
+        rule = rule.strip().lstrip("-").strip()
+        if not rule:
+            return "Error: give the rule to remember."
+        path = settings.home / "SOUL.md"
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        if rule in text:
+            return "That rule is already in SOUL.md."
+        if SOUL_MARK not in text:
+            text = text.rstrip() + f"\n\n{SOUL_MARK}\n"
+        path.write_text(text.rstrip() + f"\n- {rule}\n", encoding="utf-8")
+        return (f"Added to SOUL.md under '{SOUL_MARK}': {rule}\n"
+                f"It is part of my instructions from the next turn on ({path}).")
+
+    def create_skill(name: str, description: str, body: str) -> str:
+        slug = re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-")
+        if not slug or not description.strip() or not body.strip():
+            return "Error: a skill needs a name, a one-line description and a body."
+        folder = settings.home / "skills" / slug
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "SKILL.md").write_text(
+            f"---\nname: {slug}\ndescription: {description.strip()}\n---\n\n"
+            f"{body.strip()}\n", encoding="utf-8")
+        skills.refresh()      # the catalog is built at startup; this is the reload
+        return (f"Wrote skill '{slug}' to {folder / 'SKILL.md'}. It is in the catalog now, "
+                f"and its body loads when a job matches it or you call read_skill.")
+
+    return [
+        Tool(name="manage_memory",
+             description=("Search, correct or retract a durable fact. `search` finds ids, "
+                          "`correct` needs an id and new content, `forget` needs an id. Use it "
+                          "when the user says something you remembered is wrong or out of date."),
+             input_schema={"type": "object", "properties": {
+                 "action": {"type": "string", "description": "search | correct | forget"},
+                 "query": {"type": "string", "description": "for search"},
+                 "id": {"type": "integer", "description": "for correct and forget"},
+                 "subject": {"type": "string", "description": "optional new subject"},
+                 "content": {"type": "string", "description": "the corrected fact"}},
+                 "required": ["action"]},
+             fn=manage_memory, risk="ask"),
+        Tool(name="update_soul",
+             description=("Save a standing rule about how you should behave for this user — a "
+                          "preference that should outlive this conversation. Not for facts "
+                          "about the world or about people: those are save_note."),
+             input_schema={"type": "object", "properties": {
+                 "rule": {"type": "string", "description": "one imperative sentence"}},
+                 "required": ["rule"]},
+             fn=update_soul, risk="ask"),
+        Tool(name="create_skill",
+             description=("Write down a repeatable procedure the user just taught you, as a "
+                          "skill you can follow next time. The description is what you will "
+                          "see in your catalog, so make it say when to use this."),
+             input_schema={"type": "object", "properties": {
+                 "name": {"type": "string", "description": "short, hyphenated"},
+                 "description": {"type": "string", "description": "one line: when to use it"},
+                 "body": {"type": "string", "description": "the numbered procedure"}},
+                 "required": ["name", "description", "body"]},
+             fn=create_skill, risk="ask"),
+    ]

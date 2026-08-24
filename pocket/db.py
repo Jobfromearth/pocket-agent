@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS facts (
     subject TEXT NOT NULL,
     content TEXT NOT NULL,
     source TEXT DEFAULT 'user',          -- 'user' (told) | 'consolidation' (distilled)
+    forgotten INTEGER DEFAULT 0,         -- retracted, not removed: see manage_memory
     created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
@@ -162,4 +163,23 @@ def connect(home: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=3000")
     conn.executescript(SCHEMA)
+    add_missing_columns(conn)
     return _SerializedConnection(conn)
+
+
+# `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so a
+# database made by an older version keeps its old columns. This is the whole
+# migration story and it is deliberately this small: add a column, never rename
+# one, never drop one. A schema you can only add to is a schema you can never
+# lose data to.
+ADDED_COLUMNS = (("facts", "forgotten", "INTEGER DEFAULT 0"),)
+
+
+def add_missing_columns(conn: sqlite3.Connection) -> list[str]:
+    added = []
+    for table, column, spec in ADDED_COLUMNS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {spec}")
+            added.append(f"{table}.{column}")
+    return added

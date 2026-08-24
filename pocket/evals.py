@@ -1115,6 +1115,98 @@ def test_an_unreported_cache_is_zero_not_a_guess():
     assert spend["cached"] == 0 and spend["cache_hit"] == 0.0, spend
 
 
+# ---------------------------------------------- the assistant editing itself
+def test_a_retracted_fact_leaves_memory_but_not_the_database():
+    """"Nothing is deleted" has to survive a tool whose whole job is forgetting."""
+    pocket = build_agent(confirm=lambda *a: True)
+    pocket.respond("Remember that Alex prefers morning meetings")
+    found = pocket.tools.execute("manage_memory", {"action": "search", "query": "alex"})
+    fact_id = int(found.split("]")[0].lstrip("["))
+
+    assert pocket.memory.facts.search("alex morning"), "precondition: it is retrievable"
+    out = pocket.tools.execute("manage_memory", {"action": "forget", "id": fact_id})
+    assert "still in state.db" in out, out
+    assert not pocket.memory.facts.search("alex morning"), "a forgotten fact must not retrieve"
+    row = pocket.conn.execute("SELECT forgotten, content FROM facts WHERE id = ?",
+                              (fact_id,)).fetchone()
+    assert row["forgotten"] == 1 and "morning" in row["content"], "the row and its text survive"
+    pocket.memory.export_markdown()
+    assert "morning meetings" not in (pocket.settings.home / "MEMORY.md").read_text(
+        encoding="utf-8"), "the mirror shows what is remembered, not what was"
+
+
+def test_a_corrected_fact_is_findable_by_its_new_words_only():
+    """The FTS shadow is content-backed, so an UPDATE that skips it leaves the
+    index answering with text the table no longer holds."""
+    pocket = build_agent(confirm=lambda *a: True)
+    pocket.respond("Remember that Alex prefers morning meetings")
+    fact_id = int(pocket.tools.execute(
+        "manage_memory", {"action": "search", "query": "alex"}).split("]")[0].lstrip("["))
+    pocket.tools.execute("manage_memory", {"action": "correct", "id": fact_id,
+                                           "content": "Alex prefers late evening calls"})
+    assert pocket.memory.facts.search("evening calls"), "the new wording must be findable"
+    assert not pocket.memory.facts.search("morning meetings"), "the old wording must not be"
+
+
+def test_manage_memory_reports_what_it_cannot_do_instead_of_raising():
+    pocket = build_agent(confirm=lambda *a: True)
+    assert pocket.tools.execute("manage_memory", {"action": "forget", "id": 999}
+                                ).startswith("Error: no fact")
+    assert pocket.tools.execute("manage_memory", {"action": "correct", "id": 1}
+                                ).startswith("Error: correct needs")
+    assert pocket.tools.execute("manage_memory", {"action": "juggle"}
+                                ).startswith("Error: unknown action")
+
+
+def test_a_learned_rule_reaches_the_next_prompt():
+    pocket = build_agent(confirm=lambda *a: True)
+    out = pocket.tools.execute("update_soul", {"rule": "Always answer in metric units."})
+    assert "SOUL.md" in out, out
+    assert "Always answer in metric units." in pocket.session.build_system_parts("hi")[0], \
+        "a learned rule belongs in the STABLE half, or it costs the cache every turn"
+    assert "already in SOUL.md" in pocket.tools.execute(
+        "update_soul", {"rule": "Always answer in metric units."}), "no duplicate rules"
+
+
+def test_a_written_skill_is_in_the_catalog_without_a_restart():
+    pocket = build_agent(confirm=lambda *a: True)
+    before = len(pocket.memory.skills.skills)
+    out = pocket.tools.execute("create_skill", {
+        "name": "Weekly Review", "description": "How to run the Friday weekly review",
+        "body": "1. List the week's events.\n2. Ask what to carry over."})
+    assert "weekly-review" in out, out
+    assert len(pocket.memory.skills.skills) == before + 1, "the catalog is reloaded, not stale"
+    assert "weekly-review" in pocket.session.build_system_parts("hi")[0]
+    assert "carry over" in pocket.tools.execute("read_skill", {"name": "weekly-review"})
+
+
+def test_the_three_self_edit_tools_all_ask_first():
+    """They change what this assistant will be next session, which is a different
+    kind of power from create_event and gets a different default."""
+    pocket = build_agent(confirm=None)
+    valid = {"manage_memory": {"action": "search"}, "update_soul": {"rule": "be brief"},
+             "create_skill": {"name": "n", "description": "d", "body": "b"}}
+    for name, args in valid.items():
+        assert pocket.tools.get(name).risk == "ask", name
+        assert pocket.tools.execute(name, args).startswith("Blocked by policy"), name
+    assert not (pocket.settings.home / "skills").exists(), "a blocked tool must not have run"
+
+
+def test_an_older_database_gains_the_column_it_is_missing():
+    """CREATE TABLE IF NOT EXISTS does nothing to a table that already exists."""
+    import sqlite3 as _sqlite3
+
+    from pocket.db import add_missing_columns
+
+    home = Path(tempfile.mkdtemp(prefix="pocket-old-"))
+    old = _sqlite3.connect(home / "old.db")
+    old.row_factory = _sqlite3.Row
+    old.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY, subject TEXT, content TEXT)")
+    assert add_missing_columns(old) == ["facts.forgotten"]
+    assert add_missing_columns(old) == [], "a second run must be a no-op"
+    assert old.execute("SELECT forgotten FROM facts").fetchall() == []
+
+
 # -------------------------------------------------------------- the README
 def test_the_line_count_in_the_readme_is_still_true():
     """nanobot ships core_agent_lines.sh so the number in its README cannot rot.
