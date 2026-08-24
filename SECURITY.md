@@ -41,8 +41,10 @@ best-effort project — expect a reply in days, not hours.
   the permission gate, the narrow core tool set, the address guard that stops a
   fetched page from steering the next fetch inwards, and a trace you can read
   afterwards — not detection.
-- **`POCKET_TRUST` is a loaded gun.** It skips the prompt for the names you list;
-  list only tools you have read.
+- **`POCKET_TRUST` is a loaded gun, and it disarms more than the prompt.** It
+  skips confirmation for the names you list — including the one-shot escalation
+  `injection.py` arms after a high-risk result, which works by asking. A trusted
+  tool cannot be escalated. List only tools you have read.
 - **`.pocket/` is not encrypted.** It is a directory of your data — facts,
   calendar, traces, artifacts. Back it up or delete it like any other.
 - **Keys live in `.env` and in your environment.** `.gitignore` covers `.env` and

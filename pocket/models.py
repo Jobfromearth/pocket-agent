@@ -35,6 +35,11 @@ class Provider:
     small_model: str     # the cheap one: gate, triage, consolidation
 
 
+# Rate limits are the normal case, not the exception: a free Moonshot tier allows
+# three requests a minute, and an eval run makes fifty. Both SDKs honour a
+# `retry-after` header, so the only thing missing was the patience to use it.
+MAX_RETRIES = 10
+
 PROVIDERS: dict[str, Provider] = {
     "anthropic": Provider("anthropic", "ANTHROPIC_API_KEY", None,
                           "claude-sonnet-5", "claude-haiku-4-5"),
@@ -94,10 +99,11 @@ class AnthropicClient:
     its own: mark the stable prefix cacheable. Usage comes back unchanged, so
     `cache_read_input_tokens` reaches the ledger."""
 
-    def __init__(self, api_key: str, base_url: str | None = None):
+    def __init__(self, api_key: str, base_url: str | None = None,
+                 max_retries: int = MAX_RETRIES, timeout: float = 120.0):
         import anthropic
 
-        kwargs: dict = {"api_key": api_key}
+        kwargs: dict = {"api_key": api_key, "max_retries": max_retries, "timeout": timeout}
         if base_url:
             kwargs["base_url"] = base_url
         self._client = anthropic.Anthropic(**kwargs)
@@ -124,7 +130,8 @@ class OpenAICompatClient:
     def __init__(self, api_key: str, base_url: str | None = None, timeout: float = 120.0):
         import openai
 
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+        self._client = openai.OpenAI(api_key=api_key, base_url=base_url, timeout=timeout,
+                                     max_retries=MAX_RETRIES)
         self.messages = SimpleNamespace(create=self._create)
 
     @staticmethod

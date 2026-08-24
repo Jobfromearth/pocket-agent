@@ -244,15 +244,26 @@ def run_judged(build_agent, client=None, small_model: str = "") -> JudgedRun:
     return JudgedRun(verdicts=verdicts)
 
 
+def scratch_agent():
+    """Your provider and your key, but never your memory. The cases say
+    "remember that Alex prefers mornings", and grading a suite must not leave
+    that behind in the assistant you actually use."""
+    import tempfile
+    from pathlib import Path
+
+    from pocket.agent import Pocket
+    from pocket.config import Settings, load_settings
+
+    settings = Settings(**{**vars(load_settings()),
+                           "home": Path(tempfile.mkdtemp(prefix="pocket-judged-"))})
+    return Pocket(settings=settings)
+
+
 def main(build_agent=None) -> int:
     """`python -m pocket judge` — the scored suite on its own. It reports and
     returns non-zero when something is under threshold; the release gate in
     `evals.py` is what decides whether that blocks a release."""
-    if build_agent is None:
-        from pocket.agent import Pocket
-
-        build_agent = Pocket
-    run = run_judged(build_agent)
+    run = run_judged(build_agent or scratch_agent)
     if run.skipped:
         print(f"judged: skipped — {run.skipped}")
         return 0

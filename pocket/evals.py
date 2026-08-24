@@ -62,7 +62,13 @@ def build_agent(confirm=None, **overrides) -> Pocket:
     stands in for the human the permission policy asks."""
     home = Path(tempfile.mkdtemp(prefix="pocket-eval-"))
     settings = Settings(provider="mock", home=home, **overrides)
-    return Pocket(settings=settings, client=ScriptedClient(), confirm=confirm)
+    pocket = Pocket(settings=settings, client=ScriptedClient(), confirm=confirm)
+    # POCKET_TRUST is read from the environment when a Policy is built, so a
+    # developer who trusts a tool for their own chats would otherwise turn the
+    # permission cases green on their machine and red in CI. A suite that reads
+    # the machine it runs on is not a deterministic suite.
+    pocket.policy.trusted.clear()
+    return pocket
 
 
 DEMO_SERVER = [sys.executable, "-m", "pocket.examples.demo_server"]
@@ -1653,12 +1659,13 @@ def main(argv: list[str] | None = None) -> int:
         print("release gate: PASS")
         return 0
 
-    from pocket.agent import Pocket
     from pocket.config import load_settings
+    from pocket.judge import scratch_agent
 
     settings = load_settings()
+
     print()
-    judged = run_judged(Pocket)
+    judged = run_judged(scratch_agent)
     if judged.skipped:
         print(f"judged: skipped — {judged.skipped}")
     else:
