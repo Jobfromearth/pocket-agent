@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+**Ten skills, and a matcher that stopped matching on function words.** The
+catalog shipped one skill, which made the two-level disclosure a mechanism with
+nothing to disclose. There is no library to download for this: Anthropic's
+skills need file tools and the good ones are source-available, and waku's call
+`read_apple_calendar` and `read_apple_mail`. A catalog advertising procedures
+the assistant cannot follow is worse than an empty one, so these are written
+against the tools pocket actually has. `weekly-brief` borrows its shape — a
+lead, then chronological, then one focus line — from waku's, MIT.
+
+Writing them exposed two matcher bugs. `[^\W_]{2,}` admitted `me`, `to`, `on`,
+and in a short message two function words cleared the overlap bar on their own:
+"write me a python script to parse csv" was matching `teach-me-a-standing-rule`
+on {me, to}. And every description was English, so the CJK tokeniser added
+earlier had nothing to match against — descriptions now carry Chinese trigger
+phrases, which is what makes that tokeniser earn its keep.
+
+Measured, with ten skills: the catalog costs ~477 tokens resident, the bodies it
+defers are ~1,946. The stable half of the system prompt is ~997 tokens instead
+of the ~2,944 it would be with every body inlined.
+
 **A coding task can leave the process.** `coder.py` — `delegate_task` hands a
 job that has to read, write or run files to an agent that already has those
 tools, defaulting to pi. The alternative was building a filesystem and a shell
@@ -186,7 +206,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 116 deterministic cases.
+**Evals:** 46 → 117 deterministic cases.
 
 ## 0.3.0
 

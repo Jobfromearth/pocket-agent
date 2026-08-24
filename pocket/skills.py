@@ -43,12 +43,24 @@ MAX_AUTO_SKILLS = 2
 # segmenter. The same reasoning as `fts_query` in memory.py, for the same reason.
 _UNSEGMENTED = re.compile("[぀-ヿ㐀-䶿一-鿿]")
 _WORDS = re.compile(r"[^\W_]{2,}")
+# Function words carry no signal about WHICH skill a message wants, and in a
+# short message two of them are enough to clear the overlap bar on their own —
+# "write me a script to parse csv" was matching on {me, to}. The list is short
+# on purpose: a long stopword list is a language model nobody can debug.
+_FUNCTION_WORDS = (
+    "me my we us it is of at or as be do if so up on in to no an the and for you "
+    "are was that this with from have has not but all can its our your who how "
+    "why what when some any get let out off about into over than then them they "
+    "he she his her him one two use using used new now")
+STOPWORDS = frozenset(_FUNCTION_WORDS.split())
 
 
 def tokens(text: str) -> set[str]:
     """Words for a spaced language, characters and bigrams for one without."""
     found: set[str] = set()
     for word in _WORDS.findall(text.lower()):
+        if word in STOPWORDS:
+            continue
         if _UNSEGMENTED.search(word):
             found.update(word)
             found.update(word[i:i + 2] for i in range(len(word) - 1))

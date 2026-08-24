@@ -172,6 +172,17 @@ def test_consolidation_distils_facts_after_n_exchanges():
     assert left["c"] == 0, "consolidated rows were not marked"
 
 
+def test_function_words_do_not_decide_which_skill_fires():
+    """Two of them clear the overlap bar on their own: "write me a script to
+    parse csv" was matching skills on {me, to}."""
+    from pocket.skills import STOPWORDS, tokens
+
+    assert tokens("write me a script to parse csv") == {"write", "script", "parse", "csv"}
+    assert "me" in STOPWORDS and "to" in STOPWORDS
+    pocket = build_agent()
+    assert [s.name for s in pocket.memory.skills.match("write me a python script to parse csv")]         == ["write-a-small-program"]
+
+
 def test_the_catalog_ships_always_and_the_body_does_not():
     """Level one costs a line per skill. Level two costs nothing until wanted —
     that is the entire trade the mechanism exists to make."""
@@ -197,8 +208,10 @@ def test_a_language_the_matcher_cannot_tokenise_still_reaches_the_body():
     language, silently. Now it tokenises them, and `read_skill` is the floor
     under it either way."""
     pocket = build_agent()
-    assert [s.name for s in pocket.memory.skills.match("帮我安排一个 schedule meeting")] \
-        == ["schedule-meeting"]
+    chinese = [s.name for s in pocket.memory.skills.match("帮我安排一个会议")]
+    assert chinese and chinese[0] == "schedule-meeting", chinese
+    mixed = [s.name for s in pocket.memory.skills.match("帮我安排一个 schedule meeting")]
+    assert "schedule-meeting" in mixed, mixed
     opened = pocket.tools.execute("read_skill", {"name": "schedule-meeting"})
     assert "Default to 09:00" in opened, opened
     assert "Error: no skill" in pocket.tools.execute("read_skill", {"name": "nope"})

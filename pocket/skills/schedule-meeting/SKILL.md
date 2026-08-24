@@ -1,6 +1,6 @@
 ---
 name: schedule-meeting
-description: How to schedule a meeting, catch-up or call with someone, including how to pick a time when the user does not give one.
+description: How to schedule a meeting, catch-up or call with someone, including how to pick a time when the user does not give one. 中文触发：安排会议 约个时间 订个会 和某人见面。
 ---
 
 When the user asks to schedule, book, or set up a meeting:
