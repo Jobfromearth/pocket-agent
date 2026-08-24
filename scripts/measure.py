@@ -53,7 +53,7 @@ print("=" * 72)
 p = agent(tool_result_limit=2000)
 big = "x" * 40_000
 shown = offload_if_large("firehose", big, p.settings.home, p.settings.tool_result_limit)
-print(f"offloading a 40KB tool result:")
+print("offloading a 40KB tool result:")
 print(f"  raw:                     {len(big):>6} chars (~{len(big)//CHARS_PER_TOKEN} tok)")
 print(f"  what the prompt sees:    {len(shown):>6} chars (~{len(shown)//CHARS_PER_TOKEN} tok)")
 print(f"  reduction:               {100 * (1 - len(shown)/len(big)):>6.1f}%   "
@@ -86,6 +86,7 @@ print("C. THE GATE")
 print("=" * 72)
 import pocket.evals as ev
 import pocket.judge as jd
+
 print(f"deterministic cases:       {len(ev.CASES)}")
 print(f"judged verdicts per run:   {1 + len(jd.RESPONSE_CASES)} "
       f"({len(jd.GATE_CASES)} gate cases -> 1 cost-weighted verdict, "

@@ -62,4 +62,4 @@ jobs:
         with:
           python-version: "3.11"
       - name: lint
-        run: pipx run ruff==0.16.0 check pocket
+        run: pipx run ruff==0.16.0 check pocket scripts
