@@ -45,6 +45,10 @@ os.environ.setdefault("ERROR_REPORTING", "NO")
 # answers confidently from nothing; a false positive costs one local FTS5 query.
 FALSE_NEGATIVE_COST = 4.0
 
+# A grader is one JSON object, but a reasoning model thinks first and the
+# thinking comes out of the same budget.
+JUDGE_MAX_TOKENS = 8192
+
 def build_judge(client, model: str):
     """DeepEval's grader, wired to the provider pocket is already using.
 
@@ -67,14 +71,22 @@ def build_judge(client, model: str):
             return f"pocket:{self._model}"
 
         def generate(self, prompt: str, schema=None):
+            # generous on purpose: a reasoning model spends most of a small
+            # budget thinking and then has none left for the JSON, and a grader
+            # that runs out of room fails CLOSED — scoring a real reply zero for
+            # a reason that has nothing to do with the reply
             response = self._client.messages.create(
-                model=self._model, max_tokens=1024,
+                model=self._model, max_tokens=JUDGE_MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt}])
             text = "".join(b.text for b in response.content if b.type == "text")
             if schema is None:
                 return text
             # reasoning models put a thinking block before the JSON, so slice to
             # the outermost braces rather than trusting the whole reply to parse
+            if "{" not in text or "}" not in text:
+                raise ValueError(
+                    f"the grader returned no JSON in {len(text)} chars "
+                    f"(stop_reason={getattr(response, 'stop_reason', '?')})")
             return schema.model_validate_json(text[text.index("{"): text.rindex("}") + 1])
 
         async def a_generate(self, prompt: str, schema=None):
@@ -154,7 +166,8 @@ def score_reply(judge, name: str, message: str, reply: str, criteria: str) -> tu
                        threshold=RESPONSE_THRESHOLD,
                        evaluation_params=[LLMTestCaseParams.INPUT,
                                           LLMTestCaseParams.ACTUAL_OUTPUT])
-        metric.measure(LLMTestCase(input=message, actual_output=reply))
+        metric.measure(LLMTestCase(input=message, actual_output=reply),
+                       _show_indicator=False)   # a spinner is not a log
         return float(metric.score), str(metric.reason or "")[:80]
     except Exception as exc:
         return 0.0, f"judge failed closed ({type(exc).__name__}: {exc})"[:80]
