@@ -22,7 +22,7 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
 对话中输入 `/help` `/tools` `/context` `/memory` `/board` `/new`，由 harness 直接回答，
 永远不会送到模型那里。
 
-核心**只依赖标准库**，`pocket/*.py` 合计 **7,110 行**；`anthropic` / `openai` 只有在你指定
+核心**只依赖标准库**，`pocket/*.py` 合计 **7,113 行**；`anthropic` / `openai` 只有在你指定
 对应 provider 时才会惰性导入。那个行数不是装饰——[评测里有一条断言它仍然属实](pocket/evals.py)，
 `./scripts/line_budget.sh` 会按支柱把它打印出来。
 
