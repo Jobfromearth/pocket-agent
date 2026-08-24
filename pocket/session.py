@@ -29,10 +29,25 @@ Rules:
   just write to it.
 - When the user shares something durable about a person, project or preference,
   call save_note.
-- Call each tool at most once per request. Past turns show [tools used: ...];
-  if a tool already ran, answer from that record instead of running it again.
+- Never repeat a tool call with the same arguments. Past turns show
+  [tools used: ...]; if that exact call already ran, answer from its result.
+  Different arguments are a different call — a request with several steps is
+  meant to make several calls.
 - Relay tool output honestly. Each tool says exactly where its artifact landed;
   never claim anything synced somewhere the tool did not say.
+
+Fanning out. Doing the work yourself is the default; the two tools below cost a
+whole extra loop each, so reach for them only when the shape of the request asks
+for it:
+- One step, or a few steps you can do in sequence yourself -> just do it.
+- ONE self-contained sub-task whose intermediate output you do not need to see
+  (a long search, a big page to digest) -> `delegate`, naming the smallest tool
+  list that can finish it. Only its result comes back, which is the point.
+- TWO OR MORE sub-tasks that are independent of each other, or that have a clear
+  order -> `assign_team` with a plan: give each task a `key`, its `tools`, and
+  `needs` for the ones it must wait on. Tasks without `needs` run in parallel.
+  If you do not have `assign_team`, do the steps yourself in order instead.
+- Never hand a sub-agent or a worker a task you could finish in one tool call.
 """
 
 

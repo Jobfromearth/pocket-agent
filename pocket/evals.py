@@ -1040,6 +1040,36 @@ def test_read_history_returns_what_the_summary_lost():
     assert pocket.tools.execute("read_history", {"offset": 999}).startswith("No messages")
 
 
+# --------------------------------------------------------------- fanning out
+def test_the_soul_says_when_to_fan_out_instead_of_leaving_it_to_taste():
+    """A capability the model is never told to reach for is a capability that
+    does not happen. The tool descriptions alone were not saying when."""
+    from pocket.session import DEFAULT_SOUL
+
+    assert "delegate" in DEFAULT_SOUL and "assign_team" in DEFAULT_SOUL
+    assert "Never repeat a tool call with the same arguments" in DEFAULT_SOUL, \
+        "the old rule was 'each tool at most once', which brakes multi-step work"
+    assert "run in parallel" in DEFAULT_SOUL
+
+
+def test_a_multi_step_request_reaches_the_board_when_a_team_is_registered():
+    pocket = build_agent(team=True, confirm=lambda *a: True)
+    result = pocket.respond("Plan a kickoff: remember it, book it and then confirm it")
+    assert [c["tool"] for c in result.tool_calls] == ["assign_team"], result.tool_calls
+    rows = pocket.conn.execute("SELECT key, status FROM tasks ORDER BY id").fetchall()
+    assert [r["key"] for r in rows] == ["remember", "book", "confirm"], rows
+    assert {r["status"] for r in rows} == {"done"}, rows
+
+
+def test_without_a_team_the_same_request_stays_in_one_loop():
+    """`assign_team` is off by default because every registered tool ships in
+    every prompt. The model must not be able to reach what it was not given."""
+    pocket = build_agent(confirm=lambda *a: True)
+    assert "assign_team" not in pocket.tools.names()
+    result = pocket.respond("Plan a kickoff: remember it, book it and then confirm it")
+    assert "assign_team" not in [c["tool"] for c in result.tool_calls]
+
+
 # -------------------------------------------------------------- the README
 def test_the_line_count_in_the_readme_is_still_true():
     """nanobot ships core_agent_lines.sh so the number in its README cannot rot.

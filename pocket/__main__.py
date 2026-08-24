@@ -167,11 +167,19 @@ def demo(pocket: Pocket) -> int:
 
 
 def tools(pocket: Pocket) -> int:
-    """Every tool in the prompt, where it came from, and whether it needs a human."""
+    """Every tool in the prompt, where it came from, and whether it needs a human.
+
+    This subcommand turns `assign_team` on so you can read it, which means the
+    listing is one tool longer than a real chat unless POCKET_TEAM=1. Saying so
+    is cheaper than a listing that quietly disagrees with the prompt."""
     for name in sorted(pocket.tools.names()):
         tool = pocket.tools.get(name)
         gate = "asks first" if tool.risk == "ask" else "runs unattended"
-        print(f"  {name:<28} {tool.origin:<12} {gate}")
+        flag = "  (POCKET_TEAM=1 only)" if name == "assign_team" else ""
+        print(f"  {name:<28} {tool.origin:<12} {gate}{flag}")
+    if not os.getenv("POCKET_TEAM"):
+        print("\n  note: assign_team is shown for reference; it is NOT in the prompt "
+              "of a normal chat.\n  Start with POCKET_TEAM=1 to give the model a team.")
     return 0
 
 

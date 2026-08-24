@@ -236,6 +236,17 @@ class ScriptedClient:
         user = next((m["content"] for m in reversed(messages)
                      if m["role"] == "user" and isinstance(m["content"], str)), "")
         low = user.lower()
+        if "assign_team" in names and re.search(
+                r"\b(and then|after that|also)\b.*\b(and then|after that|also)\b|"
+                r"\bthree things\b|\bplan a\b", low):
+            # the stub cannot plan; it proves the wiring, and parse_plan judges it
+            return self._call("assign_team", {
+                "goal": user[:80],
+                "plan": json.dumps([
+                    {"key": "remember", "task": f"Remember: {user[:60]}", "tools": "save_note"},
+                    {"key": "book", "task": user[:60], "tools": "create_event"},
+                    {"key": "confirm", "task": "What is on my calendar tomorrow?",
+                     "tools": "list_events", "needs": "book"}])})
         # "remember ..." wins over "...meeting..." — the explicit ask comes first
         if "save_note" in names and re.search(r"^remember|remember that", low):
             subject = re.search(r"remember(?: that)?\s+(\w+)", low)

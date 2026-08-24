@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+**Fan-out is now something the model is told to do.** `delegate` and
+`assign_team` were ordinary tools with good descriptions and nothing telling the
+model *when* the shape of a request calls for one — so it almost never reached
+for either. SOUL.md now carries the routing rule: do it yourself; one
+self-contained sub-task whose middle you do not need to see goes to `delegate`;
+two or more independent or ordered sub-tasks go to `assign_team` with `needs`.
+The old "call each tool at most once per request" rule was written to stop
+double-booking a meeting and was braking multi-step work as a side effect; it
+now forbids repeating a call *with the same arguments*, which is what it always
+meant. `pocket tools` also stops quietly disagreeing with a real chat: it says
+out loud that `assign_team` is shown for reference and needs `POCKET_TEAM=1`.
+
 **Context governance, in four steps instead of two.** The window is now checked
 before *every* model call rather than once when a turn starts — a turn that
 calls eight tools appends eight results after the only check a start-of-turn
@@ -76,7 +88,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 81 deterministic cases.
+**Evals:** 46 → 84 deterministic cases.
 
 ## 0.3.0
 
