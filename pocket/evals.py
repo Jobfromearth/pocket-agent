@@ -30,6 +30,8 @@ from typing import ClassVar
 from pocket import dream
 from pocket.agent import Pocket
 from pocket.bus import Bus
+from pocket.coder import argv as coder_argv
+from pocket.coder import make_coder_tool
 from pocket.config import Settings
 from pocket.context import KEEP_WHOLE_RESULTS, compact_history, fit_for_model
 from pocket.dashboard import Panels
@@ -46,6 +48,7 @@ from pocket.mcp import (
 from pocket.memory import fts_query
 from pocket.models import ScriptedClient
 from pocket.permissions import Policy
+from pocket.subagent import FanOut
 from pocket.team import RESERVED, run_team, worker_tools
 from pocket.tools import Tool, ToolRegistry
 from pocket.trace import estimate_cost, spans_or_none
@@ -1408,6 +1411,106 @@ def test_an_unreachable_http_server_is_reported_and_skipped():
                               notify=lambda kind, ev: events.append((kind, ev)))
     assert servers == [] and registry.names() == []
     assert any(kind == "mcp_error" for kind, _ in events), events
+
+
+# ------------------------------------------- delegating code out of the process
+def _coder(reply_lines, home, code=0, stderr="", files=()):
+    """The shipped tool with the subprocess swapped for a function — the same
+    seam web.py uses, so the suite never needs pi installed."""
+    def runner(args, cwd, timeout):
+        for name, text in files:
+            (Path(cwd) / name).write_text(text, encoding="utf-8")
+        return code, "\n".join(reply_lines), stderr
+
+    return make_coder_tool(home, runner=runner)
+
+
+def test_a_delegated_coding_run_leaves_a_workspace_you_can_read():
+    """The point of delegating code is the files it leaves behind, which is why
+    it gets a dated folder and not a temp dir."""
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    tool = _coder([json.dumps({"type": "message_end", "text": "wrote the parser"})], home,
+                  files=[("parser.py", "print('hi')")])
+    out = tool.fn(task="write a CSV parser")
+    assert "wrote the parser" in out, out
+    assert "parser.py" in out, out
+
+    folder = next((home / "workspace").iterdir())
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["task"] == "write a CSV parser"
+    assert manifest["exit_code"] == 0 and manifest["created"] == ["parser.py"]
+    assert manifest["command"][0] == "pi", "pi is the default coder"
+    assert (folder / "events.jsonl").exists(), "the raw event stream is kept"
+
+
+def test_a_coder_that_ignores_json_mode_still_answers():
+    """`--mode json` is pi's flag. A different agent behind POCKET_CODER may just
+    print, and printing is a perfectly good answer."""
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    out = _coder(["just plain text", "on two lines"], home).fn(task="do a thing")
+    assert "just plain text" in out and "on two lines" in out, out
+
+
+def test_a_failing_run_reports_stderr_instead_of_pretending():
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    out = _coder([], home, code=1, stderr="ImportError: no module named foo").fn(task="x")
+    assert "exit code 1" in out and "ImportError" in out, out
+
+
+def test_a_missing_coder_says_how_to_get_one():
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+
+    def missing(args, cwd, timeout):
+        raise FileNotFoundError(args[0])
+
+    out = make_coder_tool(home, runner=missing).fn(task="x")
+    assert "is not on PATH" in out and "POCKET_CODER" in out, out
+
+
+def test_the_task_is_an_argument_not_a_shell_string():
+    """Building a command string around a model-written task and splitting THAT
+    is how you get argument injection."""
+    hostile = 'fix it; rm -rf ~ && echo "pwned"'
+    args = coder_argv(hostile)
+    assert args[0] == "pi"
+    assert hostile in args, args
+    assert not any(part.startswith("rm") for part in args), args
+
+
+def test_delegated_code_output_is_screened_like_any_other_untrusted_text():
+    from pocket.injection import UNTRUSTED
+
+    assert "coder" in UNTRUSTED, "a coding agent reads files somebody else wrote"
+    home = Path(tempfile.mkdtemp(prefix="pocket-coder-"))
+    assert _coder([], home).origin == "coder"
+
+
+# --------------------------------------------------------- the fan-out budget
+def test_one_turn_may_only_start_so_many_other_agents():
+    """`delegate` asks a human once per session, after which the model can fan
+    out on every iteration — each one a whole sub-loop with its own bill."""
+    registry = ToolRegistry()
+    budget = FanOut(limit=2)
+    registry.hooks.add("before_tool", budget.before_tool)
+    for name in ("delegate", "delegate_task", "assign_team"):
+        registry.register(Tool(name, "x", {"type": "object"}, lambda: "ran"))
+    registry.register(Tool("save_note2", "x", {"type": "object"}, lambda: "saved"))
+
+    assert registry.execute("delegate", {}) == "ran"
+    assert registry.execute("delegate_task", {}) == "ran"
+    refused = registry.execute("assign_team", {})
+    assert refused.startswith("Refused:") and "limit is 2" in refused, refused
+    assert registry.execute("save_note2", {}) == "saved", "the budget is only for fan-out"
+
+    budget.turn_start("a new turn")
+    assert registry.execute("delegate", {}) == "ran", "the budget resets per turn"
+
+
+def test_the_budget_is_wired_into_a_real_assistant():
+    pocket = build_agent(fanout_per_turn=1, confirm=lambda *a: True)
+    assert pocket.tools.execute(
+        "delegate", {"task": "say hi", "tools": "save_note"}).count("sub-agent") == 1
+    assert pocket.tools.execute("delegate", {"task": "again"}).startswith("Refused:")
 
 
 # -------------------------------------------------------------- the README

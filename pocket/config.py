@@ -84,6 +84,13 @@ class Settings:
     # machine. Both are risk="ask"; POCKET_WEB=0 removes them from every prompt.
     web: bool = field(
         default_factory=lambda: os.getenv("POCKET_WEB", "1") in ("1", "true", "yes"))
+    # register `delegate_task`: a coding agent that CAN touch files, run as a
+    # subprocess. POCKET_CODER is the command; the default is pi.
+    coder: bool = field(
+        default_factory=lambda: os.getenv("POCKET_CODER_TOOL", "1") in ("1", "true", "yes"))
+    # how many sub-agents one turn may start (delegate + delegate_task + assign_team)
+    fanout_per_turn: int = field(
+        default_factory=lambda: int(os.getenv("POCKET_FANOUT_PER_TURN", "3")))
     # register the `delegate` tool (a sub-agent with a scoped tool set)
     subagents: bool = field(
         default_factory=lambda: os.getenv("POCKET_SUBAGENTS", "1") in ("1", "true", "yes"))

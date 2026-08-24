@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 
+from pocket.coder import make_coder_tool
 from pocket.config import Settings, load_settings
 from pocket.context import (
     compact_history,
@@ -30,7 +31,7 @@ from pocket.models import get_client, resolve
 from pocket.permissions import Policy
 from pocket.session import Session
 from pocket.skills import make_read_skill_tool
-from pocket.subagent import make_delegate_tool
+from pocket.subagent import FanOut, make_delegate_tool
 from pocket.team import make_team_tool
 from pocket.tools import build_registry
 from pocket.trace import Tracer
@@ -71,6 +72,8 @@ class Pocket:
         if self.settings.web:
             for tool in make_web_tools():
                 self.tools.register(tool)
+        if self.settings.coder:
+            self.tools.register(make_coder_tool(self.settings.home))
         if self.settings.subagents:
             self.tools.register(make_delegate_tool(
                 self.client, self.settings.model, self.tools,
@@ -90,6 +93,11 @@ class Pocket:
                 self.client, self.settings.model, self.tools, self.conn,
                 max_iterations=max(2, self.settings.max_iterations // 2),
                 max_tokens=self.settings.max_tokens, observer=self.tracer.event))
+        # One turn may start only so many other agents. Registered before the
+        # screen so a refused fan-out never spends its budget.
+        fanout = FanOut(limit=self.settings.fanout_per_turn)
+        self.hooks.add("turn_start", fanout.turn_start)
+        self.hooks.add("before_tool", fanout.before_tool)
         # Untrusted output is fenced on the way in, and the call after a high-risk
         # result is escalated to ask-the-human. Registered last so it sees every
         # tool, including the ones MCP is about to add.

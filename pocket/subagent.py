@@ -11,12 +11,47 @@ registry. Three rules keep it from becoming a swarm you cannot reason about:
      did not name.
 
 That makes the blast radius exactly the tool list you passed in.
+
+What it does NOT bound is how many times a turn may do this. `delegate` asks a
+human, and a session grant means it asks once — after which the model can fan
+out on every iteration of the loop, each one a whole sub-loop with its own token
+bill. Nobody counts that until it shows up on a statement, so `FanOut` counts it
+instead.
 """
 
 from __future__ import annotations
 
 from pocket.loop import run_loop
 from pocket.tools import Tool, ToolRegistry
+
+# Everything that starts another loop. A team is one entry here and up to eight
+# workers underneath, which is exactly why it is capped alongside the others.
+FANOUT_TOOLS = ("delegate", "delegate_task", "assign_team")
+
+
+class FanOut:
+    """A per-turn budget for starting other agents, registered as a hook pair.
+
+    The refusal is returned as text, like every other refusal here, so the model
+    reads "you have already fanned out twice this turn" and finishes the work
+    itself instead of the process dying or the bill continuing."""
+
+    def __init__(self, limit: int = 3):
+        self.limit = limit
+        self.spent = 0
+
+    def turn_start(self, message: str) -> None:
+        self.spent = 0            # a budget that never resets is a hard limit
+
+    def before_tool(self, name: str, args: dict) -> str | None:
+        if name not in FANOUT_TOOLS:
+            return None
+        if self.spent >= self.limit:
+            return (f"Refused: this turn has already started {self.spent} sub-agent(s), and "
+                    f"the limit is {self.limit}. Do the rest yourself, or answer with what "
+                    f"you have and let the user ask for more.")
+        self.spent += 1
+        return None
 
 SUBAGENT_SYSTEM = """\
 You are a focused sub-agent. You were given ONE task and a small set of tools.

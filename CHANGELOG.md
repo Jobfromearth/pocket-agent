@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+**A coding task can leave the process.** `coder.py` — `delegate_task` hands a
+job that has to read, write or run files to an agent that already has those
+tools, defaulting to pi. The alternative was building a filesystem and a shell
+here, and then owing a sandbox: the moment a tool executes an arbitrary string,
+a deny list stops being enough. A coding agent is serious software and it is not
+this repo's argument.
+
+Which binary runs is a config line — `POCKET_CODER` is the whole command with
+`{task}` where the instruction goes — because the part worth owning is the
+workspace, the manifest and the gate. Each run gets a dated folder (not a temp
+dir: the files are the point), the raw event stream in `events.jsonl`, and a
+`manifest.json` naming what ran, where, its exit code and what it created. It is
+NOT a sandbox and SECURITY.md says so.
+
+**A per-turn fan-out budget.** `delegate` asks a human once per session, after
+which the model could start a sub-loop on every iteration of the loop, each with
+its own token bill — and nobody counts that until it shows up on a statement.
+`FanOut` is a hook pair that counts it: three per turn by default, across
+`delegate`, `delegate_task` and `assign_team` together, refused as text.
+
 **MCP over Streamable HTTP.** `mcp.py` splits into a protocol half and a
 transport half: `Server` owns `_meta`, the `server/discover` probe, `tools/list`
 and `tools/call` and knows nothing about pipes or sockets, so the new transport
@@ -157,7 +177,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 105 deterministic cases.
+**Evals:** 46 → 113 deterministic cases.
 
 ## 0.3.0
 

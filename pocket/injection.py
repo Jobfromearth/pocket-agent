@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 
 # Origins whose output is somebody else's text. Core tools read this machine's
 # own database; everything here crossed a boundary to get in.
-UNTRUSTED = ("mcp:", "web", "subagent", "team")
+UNTRUSTED = ("mcp:", "web", "subagent", "team", "coder")
 
 SHAPES: tuple[tuple[str, str, int], ...] = (
     (r"ignore\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?)",

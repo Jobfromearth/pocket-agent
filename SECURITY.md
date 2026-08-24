@@ -24,12 +24,18 @@ best-effort project — expect a reply in days, not hours.
 | untrusted output | `injection.py` | anything from web, MCP, a sub-agent or a worker is classified, fenced as data with the finding stated, and a high-risk result escalates the next tool call to ask-the-human, once |
 | chat allow-list | `telegram.py` | the bot answers listed chat ids only; with the list empty it starts, prints who wrote to it, and answers nobody |
 | self-edit asks | `memory.py` | `manage_memory`, `update_soul` and `create_skill` change what this assistant will be next session, so all three are `risk="ask"` — including `manage_memory`'s harmless `search`, because a tool whose risk depends on an argument is a tool whose risk you cannot read off the registry |
+| fan-out budget | `subagent.py` | one turn may start at most `POCKET_FANOUT_PER_TURN` sub-agents; a session grant means `ask` is answered once, and without a budget the model could fan out on every iteration |
 | MCP isolation | `mcp.py` | third-party servers are separate stdio processes; a broken or hostile server is skipped, and its tools arrive namespaced and gated |
 
 ## What is *not* claimed
 
 - **Tools are not sandboxed.** They are Python functions in this process. The
   protection is the deny list plus a human, not a container.
+- **`delegate_task` is not sandboxed either, and it is a whole other agent.** It
+  runs the command in `POCKET_CODER` as you, with your files, in the directory it
+  was given, and that agent can read, write and execute. The gate is `risk="ask"`
+  and a human reading the task first. Point `cwd` at a project you are willing to
+  have edited, and read the manifest afterwards.
 - **Prompt injection is not solved.** A web page or an MCP server can put text in
   front of the model, and `fetch_url` makes that concrete. The mitigation here is
   the permission gate, the narrow core tool set, the address guard that stops a

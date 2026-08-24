@@ -49,7 +49,10 @@ smart.
 |---|---|---|
 | `POCKET_SELF_EDIT` | `1` | register `manage_memory`, `update_soul`, `create_skill` (all `risk="ask"`) |
 | `POCKET_WEB` | `1` | register `search_web` and `fetch_url` (both `risk="ask"`) |
-| `POCKET_SUBAGENTS` | `1` | register `delegate` (one sub-task, one sub-agent) |
+| `POCKET_SUBAGENTS` | `1` | register `delegate` (one sub-task, one sub-agent, in-process) |
+| `POCKET_CODER_TOOL` | `1` | register `delegate_task` (a coding agent, out of process) |
+| `POCKET_CODER` | `pi -p {task} -a --no-session --mode json` | the command `delegate_task` runs; `{task}` is where the instruction goes |
+| `POCKET_FANOUT_PER_TURN` | `3` | how many sub-agents one turn may start, across all three fan-out tools |
 | `POCKET_TEAM` | `0` | register `assign_team` (several workers over one board) |
 | `POCKET_GRAPH_WORKFLOWS` | `0` | put the triage graph in front of the loop |
 | `POCKET_TRUST` | — | comma-separated tool names pre-approved for the session |

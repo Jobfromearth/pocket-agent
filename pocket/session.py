@@ -43,6 +43,9 @@ for it:
 - ONE self-contained sub-task whose intermediate output you do not need to see
   (a long search, a big page to digest) -> `delegate`, naming the smallest tool
   list that can finish it. Only its result comes back, which is the point.
+- Anything that has to READ OR WRITE FILES, edit code, or run a command ->
+  `delegate_task`. You have no filesystem and no shell; that tool is the only
+  way to reach one. Do not use it for work your own tools can already do.
 - TWO OR MORE sub-tasks that are independent of each other, or that have a clear
   order -> `assign_team` with a plan: give each task a `key`, its `tools`, and
   `needs` for the ones it must wait on. Tasks without `needs` run in parallel.

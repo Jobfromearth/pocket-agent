@@ -57,7 +57,8 @@ you > Book a catch-up with Alex tomorrow
 | `mcp.py` | an MCP client: one protocol, two transports (stdio, Streamable HTTP) |
 | `web.py` | the open web: search and fetch, and the guard on what may be reached |
 | `permissions.py` | deny list, ask-the-human, session grants |
-| `subagent.py` | one sub-task, one sub-agent, one result |
+| `subagent.py` | one sub-task, one sub-agent, one result — and a per-turn fan-out budget |
+| `coder.py` | the one sub-task that leaves the process: a coding agent, a workspace, a manifest |
 | `team.py` | several sub-tasks over one board, scheduled by their dependencies |
 | `graph.py` | wave scheduler, code routers, and the triage workflow |
 | `trace.py` | JSONL trace + spend ledger |
