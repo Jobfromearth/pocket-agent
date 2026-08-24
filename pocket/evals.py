@@ -26,9 +26,11 @@ from types import SimpleNamespace
 from pocket.agent import Pocket
 from pocket.bus import Bus
 from pocket.config import Settings
+from pocket.context import KEEP_WHOLE_RESULTS, compact_history, fit_for_model
 from pocket.dashboard import Panels
 from pocket.graph import build_triage_graph, run_graph
 from pocket.judge import build_judge, cost_weighted_accuracy, run_judged, score_reply
+from pocket.loop import run_loop
 from pocket.mcp import StdioServer, connect_servers
 from pocket.memory import fts_query
 from pocket.models import ScriptedClient
@@ -898,6 +900,144 @@ def test_output_from_this_machines_own_tools_is_not_screened():
     output = pocket.tools.execute("save_note", {"subject": "note", "content": POISON})
     assert output.startswith("Saved to memory"), output
     assert "untrusted content" not in output
+
+
+# ------------------------------------------------- fitting a turn to its window
+def _own_blocks(messages: list[dict], kind: str) -> list[dict]:
+    """The blocks this repo built, of one type. Assistant messages also carry the
+    provider SDK's own objects, which are not dicts and are not ours."""
+    return [block for message in messages
+            for block in (message["content"] if isinstance(message["content"], list) else [])
+            if isinstance(block, dict) and block.get("type") == kind]
+
+
+def _turn_messages(n_pairs: int, result_chars: int = 4000) -> list[dict]:
+    """What `run_loop` actually builds: a request, then tool_use / tool_result
+    pairs. Shaped like the real thing because the orphan rule only exists here."""
+    messages: list[dict] = [{"role": "user", "content": "find me three things"}]
+    for i in range(n_pairs):
+        messages.append({"role": "assistant", "content": [
+            {"type": "tool_use", "id": f"call{i}", "name": "fetch_url", "input": {}}]})
+        messages.append({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": f"call{i}", "content": "R" * result_chars}]})
+    return messages
+
+
+def test_fitting_shortens_old_results_and_never_orphans_a_pair():
+    """Dropping either half of a tool_use/tool_result pair produces a request the
+    provider rejects, so this step shortens in place and removes nothing."""
+    messages = _turn_messages(6)
+    before = len(messages)
+    fitted, shrunk = fit_for_model(messages, budget_chars=12_000)
+    assert len(fitted) == before, "a message was removed; that is how orphans happen"
+    assert shrunk >= 1, "nothing was shortened but the turn was over budget"
+    ids = [b["tool_use_id"] for b in _own_blocks(fitted, "tool_result")]
+    uses = [b["id"] for b in _own_blocks(fitted, "tool_use")]
+    assert ids == uses, "every result must still answer a call"
+    results = [b["content"] for b in _own_blocks(fitted, "tool_result")]
+    assert all(len(r) == 4000 for r in results[-KEEP_WHOLE_RESULTS:]), "recent results stay whole"
+    assert "shortened to fit" in results[0], results[0][-80:]
+
+
+def test_fitting_is_a_no_op_when_the_turn_already_fits():
+    messages = _turn_messages(2, result_chars=100)
+    _, shrunk = fit_for_model(messages, budget_chars=50_000)
+    assert shrunk == 0, "a turn inside its budget must not be touched"
+
+
+def test_the_budget_is_checked_before_every_call_not_once_a_turn():
+    """A turn that calls eight tools appends eight results after the only check
+    a start-of-turn budget would ever do."""
+    pocket = build_agent()
+    calls = []
+    original = pocket.fit
+    pocket.fit = lambda messages, budget=None: calls.append(1) or original(messages, budget)
+    result = pocket.respond("Book a catch-up with Alex tomorrow")
+    assert len(calls) == result.iterations, (len(calls), result.iterations)
+
+
+# ------------------------------------------------ reacting to a provider refusal
+class _Refuses:
+    """Says the prompt is too long `times` times, then answers."""
+
+    def __init__(self, times: int):
+        self.left = times
+        self.calls = 0
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs):
+        self.calls += 1
+        if self.left > 0:
+            self.left -= 1
+            raise RuntimeError("400 bad_request: prompt is too long")
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="done")], stop_reason="end_turn",
+            usage=SimpleNamespace(input_tokens=1, output_tokens=1))
+
+
+def test_a_provider_refusal_earns_exactly_one_hard_retry():
+    client = _Refuses(times=1)
+    messages = _turn_messages(4)
+    result = run_loop(client=client, model="m", system="s", messages=messages,
+                      tools=ToolRegistry(), max_iterations=3,
+                      fit=lambda msgs, budget=None: fit_for_model(msgs, budget if budget is not None else 12_000, keep_whole=0 if budget == 0 else 3))
+    assert result.reply == "done"
+    assert client.calls == 2, "one refusal, one retry"
+    kept = [b["content"] for b in _own_blocks(messages, "tool_result")]
+    assert all("shortened to fit" in k for k in kept), "the reactive pass keeps nothing whole"
+
+
+def test_a_second_refusal_is_raised_rather_than_retried_forever():
+    """Retrying forever turns a bug into a bill."""
+    client = _Refuses(times=2)
+    try:
+        run_loop(client=client, model="m", system="s", messages=_turn_messages(2),
+                 tools=ToolRegistry(), max_iterations=3,
+                 fit=lambda msgs, budget=None: fit_for_model(msgs, 0, keep_whole=0))
+    except RuntimeError as exc:
+        assert "too long" in str(exc)
+        assert client.calls == 2, client.calls
+        return
+    raise AssertionError("the second refusal should have been raised")
+
+
+def test_a_loop_without_a_fitter_re_raises_untouched():
+    client = _Refuses(times=1)
+    try:
+        run_loop(client=client, model="m", system="s", messages=[{"role": "user", "content": "x"}],
+                 tools=ToolRegistry(), max_iterations=2)
+    except RuntimeError:
+        assert client.calls == 1, "no fitter means no retry"
+        return
+    raise AssertionError("expected the refusal to propagate")
+
+
+# ------------------------------------------- the way back from a compaction
+def test_a_compacted_conversation_names_the_way_back():
+    """`chat_log` always held every message, but until read_history existed only
+    a human with sqlite3 could reach it — which made "nothing is deleted" true
+    for the wrong reader."""
+    history = [{"role": "user", "content": "u" * 4000},
+               {"role": "assistant", "content": "a" * 4000},
+               {"role": "user", "content": "u2" * 2000},
+               {"role": "assistant", "content": "a2" * 2000},
+               {"role": "user", "content": "recent"},
+               {"role": "assistant", "content": "recent reply"}]
+    folded, count = compact_history(history, 5000, lambda prompt: "they discussed a trip")
+    assert count == 2, "keep_turns=2 means the last four messages stay verbatim"
+    marker = folded[0]["content"]
+    assert "read_history" in marker, marker
+    assert "2 messages" in marker, marker
+    assert folded[-1]["content"] == "recent reply", "recency is what a reply needs"
+
+
+def test_read_history_returns_what_the_summary_lost():
+    pocket = build_agent()
+    pocket.respond("Remember that Alex prefers morning meetings")
+    pocket.respond("thanks!")
+    recent = pocket.tools.execute("read_history", {"offset": 0, "limit": 10})
+    assert "Alex prefers morning meetings" in recent, recent
+    assert pocket.tools.execute("read_history", {"offset": 999}).startswith("No messages")
 
 
 # -------------------------------------------------------------- the README

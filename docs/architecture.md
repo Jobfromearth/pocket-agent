@@ -52,7 +52,7 @@ you > Book a catch-up with Alex tomorrow
 | `injection.py` | classify untrusted output, fence it, escalate the next call |
 | `telegram.py` | the chat door: an allow-list, a long poll, and `bus.submit()` |
 | `db.py` | the schema, and the one connection everything shares |
-| `context.py` | offloading and compaction |
+| `context.py` | offload, fit, compact, react — and `read_artifact` / `read_history` back |
 | `mcp.py` | an MCP client for other people's servers |
 | `web.py` | the open web: search and fetch, and the guard on what may be reached |
 | `permissions.py` | deny list, ask-the-human, session grants |
@@ -78,8 +78,12 @@ These are the rules the code keeps, and the eval suite exists to keep them true:
    `assign_team`, `search_web` and `fetch_url` are all `risk="ask"`, and an
    outbound URL must resolve to a public address on every hop.
    (`permissions.py`, `web.py`)
-5. **Nothing is deleted to save context.** Offloaded results are on disk;
-   compacted turns are still rows in `chat_log`. (`context.py`)
+5. **Nothing is deleted to save context, and the model can prove it.**
+   Offloaded results are on disk behind `read_artifact`; compacted turns are
+   still rows in `chat_log` behind `read_history`, and the compacted message
+   says so. Inside a turn nothing is removed at all — old tool results are
+   shortened in place, so a `tool_use` never loses its `tool_result`.
+   (`context.py`, `loop.py`)
 6. **Fan-out is one level deep.** A sub-agent cannot delegate; a worker can
    neither delegate nor start a team. (`subagent.py`, `team.py`)
 7. **The record is queryable.** Memory, calendar, chat log and the team board

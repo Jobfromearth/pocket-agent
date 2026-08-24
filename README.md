@@ -13,7 +13,7 @@ after cloning:
 ```bash
 python -m pocket demo     # a scripted tour: memory, the gate, triage, a real tool call
 python -m pocket dashboard # a browser door on 127.0.0.1:7777, sharing one bus with the terminal
-python -m pocket eval     # 73 deterministic checks, offline and free, in under a second
+python -m pocket eval     # 81 deterministic checks, offline and free, in under a second
 python -m pocket gate     # both suites + the verdict CI reads (eval_report.json)
 python -m pocket mcp      # start an MCP server and call a tool through it, no model involved
 python -m pocket team     # three workers over one board: two in parallel, one that waits
@@ -24,7 +24,7 @@ python -m pocket          # chat for real (put a key in .env)
 Inside a chat, `/help` `/tools` `/context` `/memory` `/board` `/new` are answered by the
 harness itself and never reach a model.
 
-The core imports **stdlib only** and `pocket/*.py` totals **4,988 lines**; `anthropic` /
+The core imports **stdlib only** and `pocket/*.py` totals **5,289 lines**; `anthropic` /
 `openai` load lazily, and only if you point it at that provider. That line count is not
 decoration — [an eval asserts it is still true](pocket/evals.py), and
 `./scripts/line_budget.sh` prints it per pillar.
@@ -37,7 +37,7 @@ decoration — [an eval asserts it is still true](pocket/evals.py), and
 | **Doors** | `bus.py` `dashboard.py` `telegram.py` | terminal, browser and chat, converging on one serialised session |
 | **Loop** | `loop.py` `models.py` `tools.py` | reason→act→observe with two guardrails; 2 wire formats behind one loop |
 | **Memory** | `memory.py` `db.py` `skills.py` | semantic (FTS5) / episodic / procedural, a retrieval gate, consolidation, two-level skill disclosure |
-| **Context** | `context.py` | large results offloaded to disk; history compacted when it outgrows its budget |
+| **Context** | `context.py` | four steps, cheapest first: offload, fit, compact, react — and a way back from each |
 | **Reach** | `mcp.py` `web.py` `subagent.py` | MCP tools from other people's servers; the open web behind one guarded opener; delegation to a scoped sub-agent |
 | **Team** | `team.py` | several workers over one shared board, scheduled by their dependencies |
 | **Safety** | `permissions.py` `injection.py` | deny list, ask-the-human, per-session grants; untrusted output fenced and the next call escalated — refusals come back as text |
@@ -84,11 +84,16 @@ team board), `calendar.ics`, `MEMORY.md`, `artifacts/`, `traces/<date>.jsonl`,
    the seam guards nothing. Both are `risk="ask"`, and what comes back is information, never
    instructions. `web.py`
 
-7. **The context window is a budget, spent deliberately.** A 40KB tool result is written to
-   `artifacts/` and replaced by a preview plus a pointer, with a `read_artifact` tool for the
-   part that matters; when the conversation outgrows its budget the oldest turns fold into one
-   summary and recent turns stay verbatim. Nothing is deleted — `state.db` still has every
-   message. `context.py`
+7. **The context window is a budget, spent in four steps — cheapest and most recoverable
+   first.** A 40KB tool result goes to `artifacts/` and leaves a preview plus a pointer
+   (`read_artifact`). Inside a turn the budget is checked before *every* model call, and old
+   tool results are shortened **in place**: nothing is removed, so a `tool_use` can never lose
+   its `tool_result` and become an orphan. Only when neither is enough does the oldest history
+   fold into one summary, because that is the only step that costs a model call and the only
+   one that loses detail. If the provider still says the prompt is too long, the turn shortens
+   hard and retries **once** — a second refusal is raised, because retrying forever turns a bug
+   into a bill. And "nothing is deleted" is made true for the *model*, not just for a human
+   with `sqlite3`: the compacted message names `read_history`. `context.py`, `loop.py`
 
 8. **Delegation without handing over control.** A sub-agent is one more `run_loop` with a
    narrower brief and a smaller registry. It runs inside a single tool call, only its *result*

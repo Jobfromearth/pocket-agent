@@ -11,6 +11,16 @@
 Two guardrails end every turn, and they are the reason a loop is safe to ship:
   1. the model stops asking for tools -> natural end
   2. max_iterations is reached        -> hard stop, it can never spin forever
+
+A third thing happens on every pass and is not a guardrail but a budget: `fit`
+runs before EVERY model call, not once when the turn starts. A turn that calls
+eight tools appends eight results, and checking the window only at the top means
+checking it when it was never going to be a problem. `fit` is injected, so the
+loop does not need to know how the window is kept — see context.py.
+
+If the provider says the prompt is too long anyway, the loop shortens hard and
+retries ONCE. A second refusal is raised: retrying forever turns a bug into a
+bill.
 """
 
 from __future__ import annotations
@@ -34,20 +44,53 @@ class LoopResult:
     tokens_out: int = 0
 
 
+TOO_LONG = ("too long", "too many tokens", "context length", "maximum context",
+            "context_length_exceeded", "prompt is too long")
+
+
+def is_too_long(exc: Exception) -> bool:
+    """Providers disagree about the wording and agree about nothing else, so the
+    check is on the message. A false negative just re-raises, which is what
+    would have happened anyway."""
+    text = str(exc).lower()
+    return any(phrase in text for phrase in TOO_LONG)
+
+
 def run_loop(client, model: str, system: str, messages: list[dict], tools: ToolRegistry,
              max_iterations: int = 8, max_tokens: int = 4096,
-             observer: Observer | None = None) -> LoopResult:
+             observer: Observer | None = None, fit=None) -> LoopResult:
     """Run one agent turn. `messages` is mutated in place, so afterwards it holds
-    the full working memory of the turn — which is exactly what gets traced."""
+    the full working memory of the turn — which is exactly what gets traced.
+
+    `fit(messages) -> (messages, shrunk)` keeps the turn inside its window. It is
+    injected because the loop should not own the policy, and it is optional
+    because a sub-agent with three tools does not need one."""
     notify = observer or (lambda kind, event: None)
     result = LoopResult(reply="")
+
+    def ask():
+        return client.messages.create(model=model, system=system, messages=messages,
+                                      tools=tools.schemas(), max_tokens=max_tokens)
 
     for iteration in range(1, max_iterations + 1):
         result.iterations = iteration
 
         # ---- reason
-        response = client.messages.create(model=model, system=system, messages=messages,
-                                          tools=tools.schemas(), max_tokens=max_tokens)
+        if fit is not None:
+            _, shrunk = fit(messages)
+            if shrunk:
+                notify("fit", {"iteration": iteration, "results_shortened": shrunk})
+        try:
+            response = ask()
+        except Exception as exc:
+            if fit is None or not is_too_long(exc):
+                raise
+            # the window said it fit and the provider disagreed: shorten hard,
+            # try once more, and let a second refusal out — it is a real bug
+            _, shrunk = fit(messages, 0)
+            notify("fit", {"iteration": iteration, "results_shortened": shrunk,
+                           "reactive": True, "provider_said": str(exc)[:200]})
+            response = ask()
         result.tokens_in += response.usage.input_tokens
         result.tokens_out += response.usage.output_tokens
         notify("llm", {"iteration": iteration, "model": model,

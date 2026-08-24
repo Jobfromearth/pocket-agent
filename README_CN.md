@@ -11,7 +11,7 @@
 ```bash
 python -m pocket demo     # 一趟脚本化的巡演：记忆、门控、分诊、一次真实的工具调用
 python -m pocket dashboard # 浏览器入口，127.0.0.1:7777，与终端共用同一条消息总线
-python -m pocket eval     # 73 条确定性评测，离线、免费，一秒内跑完
+python -m pocket eval     # 81 条确定性评测，离线、免费，一秒内跑完
 python -m pocket gate     # 双套件 + CI 读的裁决文件（eval_report.json）
 python -m pocket mcp      # 启一个 MCP server 并真的调一次工具，全程不涉及模型
 python -m pocket team     # 三个 worker 共用一块看板：两个并行，一个等依赖
@@ -22,7 +22,7 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
 对话中输入 `/help` `/tools` `/context` `/memory` `/board` `/new`，由 harness 直接回答，
 永远不会送到模型那里。
 
-核心**只依赖标准库**，`pocket/*.py` 合计 **4,988 行**；`anthropic` / `openai` 只有在你指定
+核心**只依赖标准库**，`pocket/*.py` 合计 **5,289 行**；`anthropic` / `openai` 只有在你指定
 对应 provider 时才会惰性导入。那个行数不是装饰——[评测里有一条断言它仍然属实](pocket/evals.py)，
 `./scripts/line_budget.sh` 会按支柱把它打印出来。
 
@@ -34,7 +34,7 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
 | **Doors** | `bus.py` `dashboard.py` `telegram.py` | 终端、浏览器、IM，汇聚到一条串行化的会话 |
 | **Loop** | `loop.py` `models.py` `tools.py` | reason→act→observe 加两条护栏；一个循环，两种线格式 |
 | **Memory** | `memory.py` `db.py` `skills.py` | 语义（FTS5）/ 情景 / 程序性记忆，检索门控，固化，Skill 两级披露 |
-| **Context** | `context.py` | 大结果外置到磁盘；超预算时历史被折叠 |
+| **Context** | `context.py` | 四级治理，从最便宜的开始：外置、贴合、压缩、兜底——每一级都留着回去的路 |
 | **Reach** | `mcp.py` `web.py` `subagent.py` | 别人 server 上的 MCP 工具；带守卫的联网；受限子 Agent |
 | **Team** | `team.py` | 多个 worker 共用一块看板，按依赖关系调度 |
 | **Safety** | `permissions.py` `injection.py` | 拒绝清单、询问人类、按会话授权；不可信输出加围栏、下一次调用升级为需人工确认——拒绝以文本回给模型 |
@@ -74,9 +74,13 @@ python -m pocket          # 真正对话（在 .env 里放一个 key）
    一起消失的守卫等于没有守卫。两个工具都是 `risk="ask"`，而拿回来的东西是信息，永远不是指令。
    `web.py`
 
-7. **上下文窗口是预算，要刻意地花。** 40KB 的工具结果会写进 `artifacts/`，只留预览加指针，并给出
-   `read_artifact` 让模型取它真正需要的那段；对话超预算时，最旧的几轮折成一条摘要，最近几轮保持
-   逐字。什么都没被删——`state.db` 里每条消息都还在。`context.py`
+7. **上下文窗口是预算，分四级来花——最便宜、最可恢复的先上。** 40KB 的工具结果会写进
+   `artifacts/`，只留预览加指针（`read_artifact`）。**一轮之内，预算在每一次模型调用前都检查**，
+   旧的工具结果被**就地缩短**：一条消息都不移除，所以 `tool_use` 永远不会丢掉它的 `tool_result`
+   变成孤儿。两级都不够时，最旧的历史才折叠成一条摘要——因为那是唯一花模型调用、也是唯一丢细节的
+   一级。如果 provider 仍然说提示太长，就狠狠缩短并**只重试一次**：第二次拒绝直接抛出，无限重试
+   是把 bug 变成账单。而且「什么都不删」是**对模型**成立的，不只是对拿着 `sqlite3` 的人：折叠后的
+   消息里写明了 `read_history`。`context.py`、`loop.py`
 
 8. **委派但不交出控制权。** 子 Agent 就是又一次 `run_loop`，只是任务更窄、工具表更小。它跑在一次
    工具调用里，只有*结果*会回到父级，并且不能再委派。爆炸半径正好是你传进去的那张工具表。

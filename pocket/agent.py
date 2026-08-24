@@ -12,7 +12,13 @@ from __future__ import annotations
 import time
 
 from pocket.config import Settings, load_settings
-from pocket.context import compact_history, make_read_artifact_tool, offload_if_large
+from pocket.context import (
+    compact_history,
+    fit_for_model,
+    make_read_artifact_tool,
+    make_read_history_tool,
+    offload_if_large,
+)
 from pocket.db import connect
 from pocket.graph import build_triage_graph, classify_message, run_graph, todays_events
 from pocket.hooks import Hooks
@@ -61,6 +67,7 @@ class Pocket:
             on_result=lambda name, output: offload_if_large(
                 name, output, self.settings.home, self.settings.tool_result_limit))
         self.tools.register(make_read_artifact_tool(self.settings.home))
+        self.tools.register(make_read_history_tool(self.conn))
         if self.settings.web:
             for tool in make_web_tools():
                 self.tools.register(tool)
@@ -166,7 +173,15 @@ class Pocket:
         return run_loop(client=self.client, model=self.settings.model, system=system,
                         messages=messages, tools=self.tools,
                         max_iterations=self.settings.max_iterations,
-                        max_tokens=self.settings.max_tokens, observer=notify)
+                        max_tokens=self.settings.max_tokens, observer=notify,
+                        fit=self.fit)
+
+    def fit(self, messages: list[dict], budget: int | None = None):
+        """The loop's window policy, as one injected callable. `budget=0` is the
+        reactive case: shorten everything shortenable, keep nothing whole."""
+        if budget == 0:
+            return fit_for_model(messages, 0, keep_whole=0)
+        return fit_for_model(messages, budget or self.settings.context_budget_chars)
 
     def _respond_via_graph(self, user_message: str, notify) -> LoopResult | None:
         """One turn through the triage graph. Returns None whenever the graph did

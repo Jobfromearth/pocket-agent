@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+**Context governance, in four steps instead of two.** The window is now checked
+before *every* model call rather than once when a turn starts — a turn that
+calls eight tools appends eight results after the only check a start-of-turn
+budget would ever do. `fit_for_model` shortens old tool results **in place**, so
+no message is removed and a `tool_use` can never lose its `tool_result`; the
+three most recent stay whole. If a provider still refuses the prompt as too
+long, the turn shortens hard and retries **once**, then raises. And the
+compacted message now names `read_history`, a new tool over `chat_log`: the
+record always held every message, but until now only a human with `sqlite3`
+could reach it, which made "nothing is deleted" true for the wrong reader.
+
+Order of the four is the point: offload, fit, react, compact. Only the last
+costs a model call and only the last loses detail.
+
 **Skills, in two levels.** `skills.py` — the catalog (name + description) always
 ships in the system prompt; a body arrives as its own message, never folded into
 the prompt, either because the matcher was confident or because the model called
@@ -62,7 +76,7 @@ address check lives in the tool rather than in the transport, because the
 transport is the seam the eval suite replaces. Both are `risk="ask"`;
 `POCKET_WEB=0` removes them from every prompt.
 
-**Evals:** 46 → 73 deterministic cases.
+**Evals:** 46 → 81 deterministic cases.
 
 ## 0.3.0
 
